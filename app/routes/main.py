@@ -20,6 +20,10 @@ def upload_file():
     files = request.files.getlist('files')
     processed_files = []
     
+    # Log the start of a batch upload
+    valid_files_count = len([f for f in files if f.filename])
+    logger.info(f"BATCH START: Received upload request with {valid_files_count} file(s).")
+    
     # In future versions, threshold could be a request parameter
     processor = PDFProcessor(threshold=200)
 
@@ -28,6 +32,7 @@ def upload_file():
             continue
         
         if not allowed_file(file.filename):
+            logger.warning(f"SKIPPED: {file.filename} - Invalid extension.")
             flash(f"Skipped {file.filename}: Invalid extension.")
             continue
 
@@ -36,8 +41,9 @@ def upload_file():
         
         try:
             file.save(input_path)
+            logger.info(f"UPLOADED: {filename} saved successfully. Starting processing...")
         except Exception as e:
-            logger.error(f"Failed to save file {filename}: {e}")
+            logger.error(f"UPLOAD ERROR: Failed to save file {filename}: {e}")
             flash(f"Error saving {filename}")
             continue
         
@@ -50,10 +56,13 @@ def upload_file():
         success, message = processor.remove_watermark(input_path, output_path)
         
         if success:
+            logger.info(f"SUCCESS: {filename} -> {output_filename}. Processing complete.")
             processed_files.append(output_filename)
         else:
+            logger.error(f"FAILURE: {filename} processing failed. Reason: {message}")
             flash(f"Error processing {filename}: {message}")
-            logger.error(f"Failed to process {filename}: {message}")
+
+    logger.info(f"BATCH END: Processed {len(processed_files)}/{valid_files_count} files successfully.")
 
     if not processed_files:
         return redirect(url_for('main.index'))
