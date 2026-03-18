@@ -101,7 +101,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const modeInput = document.querySelector(`input[name="mode"][value="${data.mode}"]`);
         if (modeInput) {
             modeInput.checked = true;
-            // Trigger UI change if needed (like showing/hiding text input)
             if (typeof toggleTextInput === 'function') toggleTextInput();
         }
         
@@ -109,15 +108,31 @@ document.addEventListener('DOMContentLoaded', function() {
         const thresholdInput = document.getElementById('thresholdRange');
         if (thresholdInput) {
             thresholdInput.value = data.threshold;
-            document.getElementById('thresholdVal').innerText = data.threshold;
+            const thresholdVal = document.getElementById('thresholdVal');
+            if (thresholdVal) thresholdVal.innerText = data.threshold;
         }
         
         // Switches
         const ocrSwitch = document.getElementById('ocrSwitch');
-        if (ocrSwitch) ocrSwitch.checked = data.do_ocr;
+        if (ocrSwitch) {
+            ocrSwitch.checked = data.do_ocr;
+            // Trigger engine select visibility
+            if (typeof toggleEngineSelect === 'function') toggleEngineSelect();
+        }
         
         const headerSwitch = document.getElementById('headerCleanSwitch');
         if (headerSwitch) headerSwitch.checked = data.do_header_clean;
+
+        // OCR Engine Recommendation
+        const ocrEngine = document.getElementById('ocrEngine');
+        if (ocrEngine) {
+            // Recommendation logic: if scanned and threshold low (likely UBS/Nomura blue), use PaddleOCR
+            if (data.type === 'scanned' || data.threshold < 190) {
+                ocrEngine.value = 'paddleocr';
+            } else {
+                ocrEngine.value = 'easyocr';
+            }
+        }
     }
 
     function updateFileList(files) {

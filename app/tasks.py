@@ -42,7 +42,13 @@ def process_pdf_task(self, input_path, output_path, mode, text_to_remove, thresh
         duration = time.time() - task_start
         if success:
             logger.info(f"✨ [TASK SUCCESS] ID: {self.request.id} | Duration: {duration:.2f}s")
-            return {'status': 'SUCCESS', 'message': '文件清洗完成', 'percent': 100, 'duration': duration}
+            return {
+                'status': 'SUCCESS', 
+                'message': '文件清洗完成', 
+                'percent': 100, 
+                'duration': round(duration, 1),
+                'engine': ocr_engine if do_ocr else 'none'
+            }
         else:
             logger.error(f"⚠️ [TASK FAILED] ID: {self.request.id} | Msg: {message}")
             return {'status': 'FAILURE', 'message': message, 'percent': 100, 'duration': duration}
