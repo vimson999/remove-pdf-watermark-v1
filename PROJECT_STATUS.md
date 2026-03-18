@@ -1,39 +1,37 @@
-  📋 项目状态梳理 (待确认)
+# 项目状态梳理 (2026-03-17)
 
-  1. 项目核心定位
-   * 目标：构建一个企业级、高可用的 PDF 智能去水印 Web 平台。
-   * 技术栈：Python 3.12 + Flask + OpenCV + PyMuPDF + Pytest。
-   * 质量标准：遵循 PEP 8 规范，代码架构分层（MVC 变体），具备工业级安全性与容错性。
+## 1. 项目核心定位
+*   **目标**：构建企业级、高可用的 PDF 智能去水印 Web 平台。
+*   **状态**：已进入 **v3.0 语义重构与硬件加速时代**。
+*   **技术栈**：Python 3.12 + Flask + OpenCV + PyMuPDF + Celery + Redis + EasyOCR (MPS Accelerated)。
 
-  2. 已完成的功能 (Milestones)
-   * 核心算法层：
-       * 实现 PDFProcessor 业务类，支持自动提取 PDF 中的主内容图像。
-       * 应用自适应像素“漂白”算法（RGB > 200 通杀），成功解决单文件多水印、浅灰/浅彩水印残留问题。
-   * Web 架构层：
-       * 完成 App 工厂模式设计，支持多环境（开发/测试/生产）配置隔离。
-       * 使用蓝图（Blueprints）解耦路由与业务。
-       * 实现了安全的文件上传、校验与命名系统。
-   * UI/UX 体验：
-       * 现代化响应式界面（Bootstrap 5），支持原生 JS 拖拽上传。
-       * 引入智能处理 Loading 遮罩，优化长文档处理时的用户等待心理。
-   * 工程化保障：
-       * 建立虚拟环境 (venv) 并规范依赖管理。
-       * 集成 pytest 自动化测试框架，当前核心用例通过率 100%。
+## 2. 已实现的重大功能
+*   **[算法层] 混合清洗与语义重建**：
+    *   **双引擎 OCR 架构 (Multi-Engine Support)**：新增 PaddleOCR 3.4.0 引擎，与 EasyOCR 形成“高精度 vs 极速”互补。
+    *   **语义重构 (OCR Injection)**：在漂白后的图片 PDF 上方原位注入透明文字层（Render Mode 3），恢复文档的可搜索与划选能力。
+    *   **坐标归一化**：统一多引擎坐标系，实现像素级文字对齐。
+    *   **像素级漂白**：利用 OpenCV 阈值算法处理 200/300 DPI 渲染图。
+*   **[性能层] 硬件级加速架构**：
+    *   **Apple Silicon (M1) 优化**：EasyOCR 链路全线激活 **MPS (Metal Performance Shaders)**。
+    *   **多进程并行 (Parallel Processing)**：引入 `ProcessPoolExecutor` 实现多页 PDF 同步处理。
+    *   **DPI 智能降维**：默认 DPI 调优至 200，在不损画质的前提下，像素处理量降低 55%。
+*   **[工程层] 工业级监控与异步**：
+    *   **全链路耗时埋点**：新增 `🚀 [START]`, `📝 [PAGE]`, `🤖 [OCR]` 等细粒度性能日志，实现处理瓶颈的可观测性。
+    *   **Celery 异步队列**：任务分发与进度轮询（JS 实时展示）。
 
-  3. 正在进行的工作 (Current Task)
-   * 工业级日志管理系统集成：
-       * 已在 config.py 中定义日志轮转（Rotation）规则（10MB/个，保留10份备份）。
-       * 正在 app/__init__.py 中集成 RotatingFileHandler，确保系统运行轨迹可追溯。
+## 3. 当前架构图
+```text
+[ 用户上传 PDF ] -> [ Flask Web ] -> [ Redis Broker ] -> [ Celery Worker ]
+                                                               |
+                                            [ PDFProcessor 引擎 (Parallel & MPS) ]
+                                                               |
+[ 异步状态返回 ] <- [ 进度轮询 & 日志审计 ] <---------------- [ 完成语义清洗 ]
+```
 
-  4. 下一步开发计划 (Roadmap)
-   * 短期 (v1.2)：
-       * 多页 PDF 全量支持：从目前的“首页长图”逻辑扩展为全文档循环迭代处理。
-       * 自定义错误处理：增加美观的 404/500 报错页面。
-   * 中期 (v2.0)：
-       * 异步处理架构：引入 Celery + Redis 异步任务队列，处理超大文件时不阻塞 Web 进程。
-       * Docker 化：编写 Dockerfile 实现一键容器化部署。
-   * 长期 (v3.0)：
-       * 智能参数化：增加前端“去水印强度”调节滑块。
-       * OCR 辅助：引入光学字符识别，防止在极端情况下误伤极浅色的正文。
+## 4. 下一步任务 (Roadmap)
+*   **v3.1 智能参数推荐**：利用 AI 自动识别 PDF 类型（扫描件 vs 电子版），自动匹配最佳阈值与模式。
+*   **v3.2 UI 批量任务增强**：支持多文件并行上传与独立的实时进度条展示。
+*   **v3.3 容器化与部署**：编写 Docker-compose 一键启动 Web, Redis, Worker 镜像。
 
 ---
+&copy; 2026 Enterprise PDF Platform R&D Team.

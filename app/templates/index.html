@@ -45,10 +45,93 @@
                             </div>
                             
                             <div id="fileListContainer" class="mt-4" style="display: none;">
-                                <h6 class="text-start text-muted mb-2 ps-1">待处理文件清单:</h6>
-                                <ul class="list-group shadow-sm" id="fileList">
+                                <div class="d-flex justify-content-between align-items-center mb-2 ps-1">
+                                    <h6 class="text-muted mb-0">待处理文件与智能建议:</h6>
+                                    <span class="badge bg-light text-primary border border-primary">AI 实时分析已开启</span>
+                                </div>
+                                <ul class="list-group list-group-flush shadow-sm rounded" id="fileList">
                                     <!-- Dynamic items will be added here -->
                                 </ul>
+                            </div>
+                        </div>
+
+                        <!-- Processing Mode Selection -->
+                        <div class="card mb-4 border-0 bg-white shadow-sm">
+                            <div class="card-body p-4">
+                                <h6 class="card-title fw-bold text-primary mb-4 d-flex align-items-center">
+                                    <span class="bg-primary text-white rounded-circle d-inline-flex justify-content-center align-items-center me-2" style="width:24px; height:24px; font-size:14px;">1</span> 
+                                    配置全局参数
+                                </h6>
+                                
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="radio" name="mode" id="modeImageBleach" value="image_bleach" checked onchange="toggleTextInput()">
+                                    <label class="form-check-label fw-semibold" for="modeImageBleach">
+                                        模式 A：图片层漂白 (扫描件)
+                                    </label>
+                                    <div class="form-text mt-0">将 PDF 转为图片，自动“漂白”浅色水印（适合发票、扫描件，会丢失可选中文本层）。</div>
+                                </div>
+                                
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="mode" id="modeTextClean" value="text_clean" onchange="toggleTextInput()">
+                                    <label class="form-check-label fw-semibold" for="modeTextClean">
+                                        模式 B：电子版文本清理 (原生文档)
+                                    </label>
+                                    <div class="form-text mt-0">直接在对象层级删除指定文本（保留文本可复制性与清晰度）。</div>
+                                </div>
+
+                                <div class="mt-3 ps-4" id="textInputContainer" style="display: none;">
+                                    <label for="textToRemove" class="form-label small fw-bold">请输入要移除的水印文本 <span class="text-muted">(多个词用逗号分隔)</span>:</label>
+                                    <input type="text" class="form-control border-primary" id="textToRemove" name="text_to_remove" placeholder="例如：知识星球：前沿信息收录, VX:FCCNN88">
+                                </div>
+
+                                <!-- Advanced Controls -->
+                                <div class="mt-4 border-top pt-3">
+                                    <h6 class="fw-bold text-secondary mb-3"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-sliders2 me-1" viewBox="0 0 16 16"><path d="M10.5 1a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V4H1.5a.5.5 0 0 1 0-1H10V1.5a.5.5 0 0 1 .5-.5ZM12 3.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5Zm-6.5 2a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V9H1.5a.5.5 0 0 1 0-1H5V6a.5.5 0 0 1 .5-.5ZM7 8.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5Zm-4.5 2a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V14H1.5a.5.5 0 0 1 0-1H2v-2.5a.5.5 0 0 1 .5-.5Zm3 3.5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 0 1h-8a.5.5 0 0 1-.5-.5Z"/></svg> 高级算法控制</h6>
+                                    
+                                    <div class="row g-3">
+                                        <div class="col-md-12">
+                                            <label for="thresholdRange" class="form-label small d-flex justify-content-between">
+                                                <span>漂白阈值 (Threshold): <b id="thresholdVal">195</b></span>
+                                                <span class="text-muted">更低 = 更激进</span>
+                                            </label>
+                                            <input type="range" class="form-range" min="150" max="250" step="5" id="thresholdRange" name="threshold" value="195" oninput="document.getElementById('thresholdVal').innerText = this.value">
+                                        </div>
+                                        
+                                        <div class="col-6">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="redactionSwitch" name="do_redaction" checked>
+                                                <label class="form-check-label small fw-semibold" for="redactionSwitch">精准文本抹除</label>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="headerCleanSwitch" name="do_header_clean" checked>
+                                                <label class="form-check-label small fw-semibold" for="headerCleanSwitch">强力页眉清理</label>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-12 mt-2">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox" id="ocrSwitch" name="do_ocr" onchange="toggleEngineSelect()">
+                                                <label class="form-check-label small fw-semibold" for="ocrSwitch">
+                                                    OCR 语义重构 <span class="badge bg-success">v3.3 开启</span>
+                                                </label>
+                                            </div>
+                                            
+                                            <div id="engineSelectContainer" class="ps-4" style="display: none;">
+                                                <label class="form-label small fw-bold text-muted mb-1">选择识别引擎:</label>
+                                                <select class="form-select form-select-sm border-primary shadow-sm" name="ocr_engine" id="ocrEngine">
+                                                    <option value="easyocr" selected>EasyOCR (极速 - 硬件加速)</option>
+                                                    <option value="paddleocr">PaddleOCR (高精度 - 工业级推荐)</option>
+                                                </select>
+                                                <div class="form-text x-small mt-1">
+                                                    <span class="text-primary">*</span> 复杂研报、密集表格建议选 <b>PaddleOCR</b>。
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -65,5 +148,25 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        function toggleTextInput() {
+            var mode = document.querySelector('input[name="mode"]:checked').value;
+            var textContainer = document.getElementById('textInputContainer');
+            var textInput = document.getElementById('textToRemove');
+            if (mode === 'text_clean') {
+                textContainer.style.display = 'block';
+                textInput.setAttribute('required', 'required');
+            } else {
+                textContainer.style.display = 'none';
+                textInput.removeAttribute('required');
+            }
+        }
+
+        function toggleEngineSelect() {
+            var ocrChecked = document.getElementById('ocrSwitch').checked;
+            var container = document.getElementById('engineSelectContainer');
+            container.style.display = ocrChecked ? 'block' : 'none';
+        }
+    </script>
 </body>
 </html>

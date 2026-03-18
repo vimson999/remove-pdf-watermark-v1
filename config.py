@@ -8,6 +8,10 @@ class Config:
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # Limit upload to 50MB
     ALLOWED_EXTENSIONS = {'pdf'}
 
+    # Celery Configuration
+    CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL') or 'redis://localhost:6379/0'
+    CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND') or 'redis://localhost:6379/0'
+
     # Logging Configuration
     LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10MB
     LOG_FILE_BACKUP_COUNT = 10

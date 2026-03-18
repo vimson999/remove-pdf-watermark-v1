@@ -3,6 +3,23 @@ from config import config
 import os
 import logging
 from logging.handlers import RotatingFileHandler
+from celery import Celery
+
+def make_celery(app):
+    celery = Celery(
+        app.import_name,
+        backend=app.config['CELERY_RESULT_BACKEND'],
+        broker=app.config['CELERY_BROKER_URL']
+    )
+    celery.conf.update(app.config)
+
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
 
 def create_app(config_name='default'):
     app = Flask(__name__)
@@ -12,7 +29,7 @@ def create_app(config_name='default'):
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['DOWNLOAD_FOLDER'], exist_ok=True)
 
-    # Configure Logging (Persist to file in ALL environments)
+    # Configure Logging
     if not os.path.exists('logs'):
         os.mkdir('logs')
 
@@ -25,12 +42,9 @@ def create_app(config_name='default'):
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
     ))
     file_handler.setLevel(logging.INFO)
-    
-    # Add file handler to app logger
     app.logger.addHandler(file_handler)
     app.logger.setLevel(logging.INFO)
     
-    # In development, also log to console (if not already handled by Flask's default)
     if app.debug:
         stream_handler = logging.StreamHandler()
         stream_handler.setLevel(logging.INFO)
