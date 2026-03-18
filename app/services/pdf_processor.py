@@ -200,10 +200,30 @@ class PDFProcessor:
 
         total_pages = len(doc)
         tasks = []
-        dpi = 200 
+        
+        # Adaptive DPI logic to prevent pixel explosion on large documents (like UBS)
+        # Target: max dimension around 3000-3500px for a good speed/quality balance
+        MAX_SAFE_PIXELS = 3500
+        DEFAULT_DPI = 200
+        
         for i in range(total_pages):
-            pix = doc[i].get_pixmap(dpi=dpi, colorspace=fitz.csRGB)
-            has_native_text = len(doc[i].get_text().strip()) > 0
+            page = doc[i]
+            rect = page.rect
+            orig_max_dim = max(rect.width, rect.height) # at 72 DPI
+            
+            # Calculate what the max dimension would be at 200 DPI
+            projected_pixels = orig_max_dim * (DEFAULT_DPI / 72)
+            
+            if projected_pixels > MAX_SAFE_PIXELS:
+                adaptive_dpi = int((MAX_SAFE_PIXELS * 72) / orig_max_dim)
+                adaptive_dpi = max(120, adaptive_dpi) # Floor at 120 DPI for OCR quality
+                logger.info(f"📏 Page {i+1} is large ({rect.width:.0f}x{rect.height:.0f}), downscaling DPI: {DEFAULT_DPI} -> {adaptive_dpi}")
+                dpi = adaptive_dpi
+            else:
+                dpi = DEFAULT_DPI
+
+            pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB)
+            has_native_text = len(page.get_text().strip()) > 0
             tasks.append((i, pix.tobytes("png"), has_native_text))
             del pix
 
