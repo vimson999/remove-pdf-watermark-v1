@@ -20,7 +20,8 @@ def run_benchmark(file_path, engine="easyocr", do_ocr=True):
     return duration
 
 if __name__ == "__main__":
-    ubs_file = "瑞银-中国中免（601888）我们仍看好公司增长前景.pdf"
+    # Point to the new samples directory
+    ubs_file = "../samples/瑞银-中国中免（601888）我们仍看好公司增长前景.pdf"
     if not os.path.exists(ubs_file):
         print(f"Error: {ubs_file} not found.")
         exit(1)
