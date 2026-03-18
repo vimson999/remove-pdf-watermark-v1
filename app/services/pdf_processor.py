@@ -308,3 +308,35 @@ class PDFProcessor:
             doc.save(output_path, garbage=4, deflate=True)
             return True, "Success"
         except Exception as e: return False, str(e)
+
+    def split_pdf(self, input_path: str, output_dir: str, step: int = 10) -> List[str]:
+        """
+        Splits a PDF into multiple files, each containing 'step' pages.
+        Returns a list of generated file paths.
+        """
+        generated_files = []
+        doc = None
+        try:
+            doc = fitz.open(input_path)
+            total_pages = len(doc)
+            base_name = Path(input_path).stem
+            
+            for start in range(0, total_pages, step):
+                end = min(start + step, total_pages)
+                output_filename = f"{base_name}_part_{start//step + 1}.pdf"
+                output_path = os.path.join(output_dir, output_filename)
+                
+                # Create a new document for the segment
+                new_doc = fitz.open()
+                new_doc.insert_pdf(doc, from_page=start, to_page=end-1)
+                new_doc.save(output_path, garbage=4, deflate=True)
+                new_doc.close()
+                
+                generated_files.append(output_filename)
+                
+            return generated_files
+        except Exception as e:
+            logger.error(f"Split Error: {e}")
+            return []
+        finally:
+            if doc: doc.close()

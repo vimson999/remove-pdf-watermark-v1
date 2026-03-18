@@ -109,6 +109,30 @@ def task_status(task_id):
         response = {'state': 'FAILURE', 'percent': 0, 'status': str(task.info)}
     return jsonify(response)
 
+@main_bp.route('/split', methods=['POST'])
+def split_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    
+    file = request.files['file']
+    step = int(request.form.get('step', 10))
+    
+    if file and allowed_file(file.filename):
+        filename = safe_filename(file.filename)
+        input_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+        file.save(input_path)
+        
+        processor = PDFProcessor()
+        generated_filenames = processor.split_pdf(input_path, current_app.config['DOWNLOAD_FOLDER'], step=step)
+        
+        return jsonify({
+            'success': True,
+            'files': generated_filenames,
+            'count': len(generated_filenames)
+        })
+    
+    return jsonify({'error': 'Invalid file type'}), 400
+
 @main_bp.route('/download/<filename>')
 def download(filename):
     # Security Check: Prevent Path Traversal
