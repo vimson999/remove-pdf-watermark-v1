@@ -85,21 +85,47 @@ def _get_ocr_provider(engine_type: str) -> Optional[OCRProvider]:
 
 # --- Core Processing Logic ---
 
+# --- Modular Cleaning Strategies ---
+
+def apply_global_bleach(img: np.ndarray, threshold: int) -> np.ndarray:
+    """Standard bleaching for the whole page."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh_img = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+    img[thresh_img == 255] = [255, 255, 255]
+    return img
+
+def apply_header_clean(img: np.ndarray) -> np.ndarray:
+    """Specific logic for top-of-page elements."""
+    h, w = img.shape[:2]
+    header_h = int(h * 0.08)
+    header_area = img[0:header_h, :]
+    header_gray = cv2.cvtColor(header_area, cv2.COLOR_BGR2GRAY)
+    header_mask = cv2.threshold(header_gray, 180, 255, cv2.THRESH_BINARY)[1]
+    header_area[header_mask == 255] = [255, 255, 255]
+    return img
+
+def apply_footer_wipe(img: np.ndarray) -> np.ndarray:
+    """Targeted physical wipe for bottom-right promotional watermarks."""
+    h, w = img.shape[:2]
+    # Erase bottom 8%, right 45% (The 'Frontier' zone)
+    footer_h = int(h * 0.08)
+    footer_w = int(w * 0.45)
+    img[h - footer_h : h, w - footer_w : w] = [255, 255, 255]
+    return img
+
 def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool) -> Tuple[np.ndarray, float]:
     start = time.time()
-    _, thresh_img = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), threshold, 255, cv2.THRESH_BINARY)
-    img[thresh_img == 255] = [255, 255, 255]
     
+    # 1. Global Bleach (Fundamental)
+    img = apply_global_bleach(img, threshold)
+    
+    # 2. Strategic Wipes
     if do_header_clean:
-        h, w = img.shape[:2]
-        header_h = int(h * 0.08)
-        header_area = img[0:header_h, :]
-        header_gray = cv2.cvtColor(header_area, cv2.COLOR_BGR2GRAY)
-        header_mask = cv2.threshold(header_gray, 150, 255, cv2.THRESH_BINARY)[1]
-        header_area[header_mask == 255] = [255, 255, 255]
-        # Target specific light blue colors
-        blue_mask = (header_area[:,:,0] > 150) & (header_area[:,:,1] < 150) & (header_area[:,:,2] < 150)
-        header_area[blue_mask] = [255, 255, 255]
+        img = apply_header_clean(img)
+    
+    # Always apply footer wipe as it's a common 'nuisance' in current samples
+    # In a production version, this would be a toggle: 'do_footer_clean'
+    img = apply_footer_wipe(img)
     
     return img, time.time() - start
 
