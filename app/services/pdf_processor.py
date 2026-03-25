@@ -113,32 +113,53 @@ def apply_footer_wipe(img: np.ndarray) -> np.ndarray:
     img[h - footer_h : h, w - footer_w : w] = [255, 255, 255]
     return img
 
-def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool) -> Tuple[np.ndarray, float]:
+def apply_ms_side_clean(img: np.ndarray) -> np.ndarray:
+    """Morgan Stanley specific: Vertical side bars or disclaimer text."""
+    h, w = img.shape[:2]
+    # Erase left vertical 5% and right vertical 5%
+    img[:, 0 : int(w * 0.05)] = [255, 255, 255]
+    img[:, int(w * 0.95) : w] = [255, 255, 255]
+    return img
+
+def apply_nomura_header_strip(img: np.ndarray) -> np.ndarray:
+    """Nomura specific: Horizontal lines in header."""
+    h, w = img.shape[:2]
+    # More aggressive header wipe for Nomura (top 12%)
+    img[0 : int(h * 0.12), :] = [255, 255, 255]
+    return img
+
+def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool, 
+                  institution: str = "unknown") -> Tuple[np.ndarray, float]:
     start = time.time()
     
-    # 1. Global Bleach (Fundamental)
+    # 1. Global Bleach
     img = apply_global_bleach(img, threshold)
     
-    # 2. Strategic Wipes
-    if do_header_clean:
+    # 2. Institution-Specific Wipes
+    if institution == "ms":
+        img = apply_ms_side_clean(img)
+    elif institution == "nomura":
+        img = apply_nomura_header_strip(img)
+    
+    # 3. Common Wipes
+    if do_header_clean and institution != "nomura": # Nomura handled above
         img = apply_header_clean(img)
     
-    # Always apply footer wipe as it's a common 'nuisance' in current samples
-    # In a production version, this would be a toggle: 'do_footer_clean'
     img = apply_footer_wipe(img)
     
     return img, time.time() - start
 
 def _process_page_parallel(page_index: int, img_bytes: bytes, threshold: int, 
-                          do_header_clean: bool, do_ocr: bool, ocr_engine: str = "easyocr") -> Dict:
+                          do_header_clean: bool, do_ocr: bool, ocr_engine: str = "easyocr",
+                          institution: str = "unknown") -> Dict:
     start_time = time.time()
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return {'index': page_index, 'success': False, 'error': 'Image decode failed'}
 
-    # 1. Bleach
-    img, bleach_duration = _bleach_image(img, threshold, do_header_clean)
+    # 1. Bleach with Institution context
+    img, bleach_duration = _bleach_image(img, threshold, do_header_clean, institution)
 
     # 2. OCR
     ocr_results = []
@@ -191,14 +212,20 @@ class PDFProcessor:
             if not Path(input_path).exists():
                 return False, "Input file does not exist."
 
+            # Auto-detect Institution
+            analysis = self.analyze_pdf(input_path)
+            institution = analysis.get('institution', 'unknown')
+            threshold = analysis.get('threshold', self.threshold)
+
             doc = fitz.open(input_path)
             total_pages = len(doc)
             
-            if mode == 'text_clean':
+            if mode == 'text_clean' and analysis['type'] == 'native':
                 res = self._process_text_clean(doc, output_path, text_to_remove)
             else:
                 res = self._process_image_bleach_parallel(doc, output_path, input_path, text_to_remove, 
-                                                         do_redaction, do_header_clean, do_ocr, ocr_engine, progress_callback)
+                                                         do_redaction, do_header_clean, do_ocr, ocr_engine, 
+                                                         progress_callback, institution, threshold)
             
             duration = time.time() - start_time
             logger.info(f"✅ [FINISH] Total time: {duration:.2f}s ({duration/total_pages:.2f}s/page)")
@@ -212,7 +239,8 @@ class PDFProcessor:
     def _process_image_bleach_parallel(self, doc: fitz.Document, output_path: str, input_path: str, 
                                       text_to_remove: str = "", do_redaction: bool = True, 
                                       do_header_clean: bool = True, do_ocr: bool = False, 
-                                      ocr_engine: str = "easyocr", progress_callback=None) -> Tuple[bool, str]:
+                                      ocr_engine: str = "easyocr", progress_callback=None,
+                                      institution: str = "unknown", threshold: int = 195) -> Tuple[bool, str]:
         if do_redaction:
             if progress_callback: progress_callback("正在精准擦除文本对象...", 5)
             phrases = [p.strip() for p in text_to_remove.replace('，', ',').split(',') if p.strip()]
@@ -227,24 +255,18 @@ class PDFProcessor:
         total_pages = len(doc)
         tasks = []
         
-        # Adaptive DPI logic to prevent pixel explosion on large documents (like UBS)
-        # Target: max dimension around 3000-3500px for a good speed/quality balance
+        # Adaptive DPI logic
         MAX_SAFE_PIXELS = 3500
         DEFAULT_DPI = 200
         
         for i in range(total_pages):
             page = doc[i]
             rect = page.rect
-            orig_max_dim = max(rect.width, rect.height) # at 72 DPI
-            
-            # Calculate what the max dimension would be at 200 DPI
+            orig_max_dim = max(rect.width, rect.height)
             projected_pixels = orig_max_dim * (DEFAULT_DPI / 72)
             
             if projected_pixels > MAX_SAFE_PIXELS:
-                adaptive_dpi = int((MAX_SAFE_PIXELS * 72) / orig_max_dim)
-                adaptive_dpi = max(120, adaptive_dpi) # Floor at 120 DPI for OCR quality
-                logger.info(f"📏 Page {i+1} is large ({rect.width:.0f}x{rect.height:.0f}), downscaling DPI: {DEFAULT_DPI} -> {adaptive_dpi}")
-                dpi = adaptive_dpi
+                dpi = max(120, int((MAX_SAFE_PIXELS * 72) / orig_max_dim))
             else:
                 dpi = DEFAULT_DPI
 
@@ -254,13 +276,12 @@ class PDFProcessor:
             del pix
 
         results_map = {}
-        # Strategy: Use fewer workers for heavy OCR to prevent system thrashing
         max_workers = min(3 if ocr_engine == "paddleocr" else 4, os.cpu_count() or 1)
         
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
-                executor.submit(_process_page_parallel, idx, img_data, self.threshold, 
-                               do_header_clean, (do_ocr and has_text), ocr_engine): idx 
+                executor.submit(_process_page_parallel, idx, img_data, threshold, 
+                               do_header_clean, (do_ocr and has_text), ocr_engine, institution): idx 
                 for idx, img_data, has_text in tasks
             }
             
@@ -272,8 +293,6 @@ class PDFProcessor:
                     if progress_callback:
                         percent = 10 + int((len(results_map) / total_pages) * 80)
                         progress_callback(f"处理中... {len(results_map)}/{total_pages}", percent)
-                    m = res.get('metrics', {})
-                    logger.info(f"📝 [PAGE] {idx+1}/{total_pages} | OCR: {m.get('ocr',0):.2f}s | Total: {m.get('total',0):.2f}s")
                 except Exception as e:
                     logger.error(f"❌ [WORKER ERROR] Page {idx+1} failed: {e}")
 
@@ -298,13 +317,27 @@ class PDFProcessor:
 
     def analyze_pdf(self, input_path: str) -> Dict:
         res = {'mode': 'image_bleach', 'threshold': 195, 'do_ocr': True, 'do_redaction': True, 
-               'do_header_clean': True, 'type': 'unknown', 'details': ''}
+               'do_header_clean': True, 'type': 'unknown', 'institution': 'unknown', 'details': ''}
         doc = None
         try:
             doc = fitz.open(input_path)
             if len(doc) == 0: return res
-            text = doc[0].get_text().strip()
-            if len(text) > 300:
+            
+            first_page_text = doc[0].get_text()
+            text_lower = first_page_text.lower()
+            
+            # Text-based detection
+            if "morgan stanley" in text_lower or "摩根士丹利" in text_lower:
+                res['institution'] = 'ms'
+                res['threshold'] = 195 # MS watermarks usually fade with 195
+            elif "nomura" in text_lower or "野村" in text_lower:
+                res['institution'] = 'nomura'
+                res['threshold'] = 190 # Nomura's faint lines need a lower threshold
+            elif "ubs" in text_lower or "瑞银" in text_lower:
+                res['institution'] = 'ubs'
+                res['threshold'] = 180
+            
+            if len(first_page_text.strip()) > 300:
                 res.update({'type': 'native', 'do_ocr': False, 'mode': 'text_clean', 'details': '检测到原生文字层。'})
             else:
                 res.update({'type': 'scanned', 'do_ocr': True, 'details': '判定为扫描件。'})
@@ -314,7 +347,10 @@ class PDFProcessor:
             img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
             header = img_np[0:int(pix.h * 0.15), :, :]
             blue_mask = (header[:,:,2] > 230) & (header[:,:,0] < 210)
+            
             if np.sum(blue_mask) / (header.shape[0] * header.shape[1]) > 0.005:
+                if res['institution'] == 'unknown':
+                    res['institution'] = 'ubs' # Common fallback
                 res.update({'threshold': 180, 'details': res['details'] + " 识别为瑞银风格，自动优化阈值。"})
             return res
         except Exception as e:
