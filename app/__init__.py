@@ -5,21 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from celery import Celery
 
-def make_celery(app):
-    celery = Celery(
-        app.import_name,
-        backend=app.config['CELERY_RESULT_BACKEND'],
-        broker=app.config['CELERY_BROKER_URL']
-    )
-    celery.conf.update(app.config)
-
-    class ContextTask(celery.Task):
-        def __call__(self, *args, **kwargs):
-            with app.app_context():
-                return self.run(*args, **kwargs)
-
-    celery.Task = ContextTask
-    return celery
+from app.celery_utils import init_celery
 
 def create_app(config_name='default'):
     app = Flask(__name__)
@@ -45,15 +31,22 @@ def create_app(config_name='default'):
     app.logger.addHandler(file_handler)
     app.logger.setLevel(logging.INFO)
     
-    if app.debug:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(logging.INFO)
-        app.logger.addHandler(stream_handler)
+    # Always add StreamHandler for console output
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s'
+    ))
+    app.logger.addHandler(stream_handler)
+    app.logger.setLevel(logging.INFO)
 
     app.logger.info('PDF Processor startup')
 
     # Register Blueprints
     from app.routes.main import main_bp
     app.register_blueprint(main_bp)
+
+    # Initialize Audit Database
+    from app.services.audit import AuditManager
+    AuditManager.init_db()
 
     return app

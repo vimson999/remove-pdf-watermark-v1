@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}智能清洗与解密 - PDF Smart Tool{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="card shadow-sm border-0 p-4">
+                <div class="text-center mb-5">
+                    <h2 class="fw-bold text-primary">智能清洗与极致解密</h2>
+                    <p class="text-muted">基于视觉漂白与对象重构算法的高精度文档清洗工具</p>
+                </div>
+
+                <div class="spinner-overlay" id="loadingSpinner" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
+                    <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;"></div>
+                    <h4 class="mt-3">算法正在重构 PDF，请稍候...</h4>
+                </div>
+
+                <form action="/upload" method="post" enctype="multipart/form-data" id="uploadForm" novalidate>
+                    <div class="mb-4">
+                        <div class="drop-zone p-5 border-2 border-dashed rounded text-center bg-light" id="dropZone" style="cursor:pointer; border-style: dashed;">
+                            <i class="bi bi-cloud-arrow-up fs-1 text-primary"></i>
+                            <h5 class="mt-3" id="dropZoneText">点击或拖拽文件到此处</h5>
+                            <p class="small text-muted" id="dropZoneSubText">支持加密 PDF 识别 | 单个最大 50MB</p>
+                            <input type="file" name="files" id="fileInput" class="d-none" multiple accept=".pdf">
+                        </div>
+
+                        <!-- 恢复文件列表展示区域 -->
+                        <div id="fileListContainer" class="mt-4" style="display: none;">
+                            <div class="d-flex justify-content-between align-items-center mb-2 ps-1">
+                                <h6 class="text-muted mb-0 small fw-bold">待处理文件与实时建议:</h6>
+                                <span class="badge bg-light text-primary border border-primary x-small">智能分析已开启</span>
+                            </div>
+                            <ul class="list-group list-group-flush shadow-sm rounded" id="fileList">
+                                <!-- 由 main.js 动态填充 -->
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card h-100 border-0 shadow-sm bg-white p-3">
+                                <h6 class="fw-bold text-primary border-bottom pb-2 mb-3">
+                                    <i class="bi bi-gear-fill me-2"></i>核心清洗模式
+                                </h6>
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="radio" name="mode" id="modeImageBleach" value="image_bleach" checked onchange="toggleTextInput()">
+                                    <label class="form-check-label fw-bold" for="modeImageBleach">模式 A：视觉漂白 (扫描件)</label>
+                                    <div class="form-text">消除印章、浅色水印，优化背景对比度。</div>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="mode" id="modeTextClean" value="text_clean" onchange="toggleTextInput()">
+                                    <label class="form-check-label fw-bold" for="modeTextClean">模式 B：语义移除 (电子版)</label>
+                                    <div class="form-text">精准移除文本对象层的水印词汇。</div>
+                                </div>
+
+                                <div class="mt-3" id="textInputContainer" style="display: none;">
+                                    <label class="form-label small fw-bold">水印关键词 (逗号分隔):</label>
+                                    <input type="text" class="form-control border-primary" id="textToRemove" name="text_to_remove" placeholder="如: 瑞银, HashCode">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card h-100 border-0 shadow-sm bg-white p-3">
+                                <h6 class="fw-bold text-primary border-bottom pb-2 mb-3">
+                                    <i class="bi bi-cpu-fill me-2"></i>AI 增强选项
+                                </h6>
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="ocrSwitch" name="do_ocr">
+                                    <label class="form-check-label fw-bold" for="ocrSwitch">启用 OCR 语义重构</label>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="headerCleanSwitch" name="do_header_clean" checked>
+                                    <label class="form-check-label fw-bold" for="headerCleanSwitch">深度页眉清洗</label>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="form-label small text-muted">漂白激进程度 (Threshold): <b id="threshDisp">195</b></label>
+                                    <input type="range" class="form-range" min="150" max="250" step="5" name="threshold" id="thresholdRange" value="195" oninput="document.getElementById('threshDisp').innerText=this.value">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 mt-5">
+                        <button type="submit" class="btn btn-primary btn-lg shadow" id="submitBtn">启动大规模清洗任务</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script>
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+
+    function toggleTextInput() {
+        const isTextClean = document.getElementById('modeTextClean').checked;
+        document.getElementById('textInputContainer').style.display = isTextClean ? 'block' : 'none';
+    }
+
+    // 统一表单校验
+    form.onsubmit = function(e) {
+        if (fileInput.files.length === 0) {
+            e.preventDefault();
+            alert('请先选择或拖入需要清洗的 PDF 文件！');
+            dropZone.classList.add('shake-animation');
+            setTimeout(() => dropZone.classList.remove('shake-animation'), 500);
+            return false;
+        }
+        document.getElementById('loadingSpinner').style.display = 'flex';
+        return true;
+    };
+
+    // --- AI 策略自动加载逻辑 ---
+    window.addEventListener('DOMContentLoaded', () => {
+        const smartConfigStr = sessionStorage.getItem('smart_clean_config');
+        if (smartConfigStr) {
+            const config = JSON.parse(smartConfigStr);
+            console.log("Applying AI Strategy:", config);
+            
+            // 设置模式
+            if (config.mode === 'text_clean') {
+                document.getElementById('modeTextClean').checked = true;
+                toggleTextInput();
+            }
+            
+            // 设置词汇
+            if (config.text_to_remove) {
+                document.getElementById('textToRemove').value = config.text_to_remove;
+            }
+            
+            // 设置开关
+            document.getElementById('headerCleanSwitch').checked = config.do_header_clean;
+            
+            // 界面高亮提示
+            const btn = document.getElementById('submitBtn');
+            btn.innerHTML = '✨ AI 智能配置已就绪 (请重新拖入文件)';
+            btn.classList.replace('btn-primary', 'btn-warning');
+            
+            dropZone.classList.add('border-primary', 'bg-primary-subtle', 'shadow');
+            document.getElementById('dropZoneSubText').innerHTML = '<span class="badge bg-primary">AI 建议已加载：请重新选择 PDF 文件</span>';
+            
+            // 消耗掉配置，防止刷新后依然高亮
+            sessionStorage.removeItem('smart_clean_config');
+        }
+    });
+</script>
+
+<style>
+    .shake-animation {
+        animation: shake 0.5s;
+    }
+    @keyframes shake {
+        0% { transform: translateX(0); }
+        25% { transform: translateX(-5px); }
+        50% { transform: translateX(5px); }
+        75% { transform: translateX(-5px); }
+        100% { transform: translateX(0); }
+    }
+</style>
+{% endblock %}

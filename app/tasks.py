@@ -1,4 +1,4 @@
-from celery import shared_task
+from app.celery_utils import celery_app
 from app.services.pdf_processor import PDFProcessor
 import os
 import logging
@@ -6,7 +6,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-@shared_task(bind=True)
+@celery_app.task(bind=True)
 def process_pdf_task(self, input_path, output_path, mode, text_to_remove, threshold, do_redaction, do_header_clean, do_ocr=False, ocr_engine="easyocr"):
     """
     Background task to process a single PDF file.

@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+
+{% block title %}深度解析与安全审计 - PDF Smart Tool{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="card shadow-sm border-0 p-4">
+                <div class="text-center mb-5">
+                    <h2 class="fw-bold text-primary">深度解析与取证分析</h2>
+                    <p class="text-muted">探测 PDF 加密强度、权限位及结构完整性，支持验证推理。</p>
+                </div>
+
+                <!-- Analysis Form -->
+                <div class="row mb-5">
+                    <div class="col-md-12">
+                        <div class="p-5 border-2 border-dashed rounded text-center bg-white shadow-sm" style="cursor:pointer;" id="analyzerDropZone">
+                            <i class="bi bi-search fs-1 text-primary"></i>
+                            <h5 class="mt-3">上传 PDF 进行深度探测</h5>
+                            <input type="file" id="analyzerFileInput" class="d-none" accept=".pdf">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Section (Hidden by default) -->
+                <div id="analysisResult" style="display: none;">
+                    <!-- NEW: Recommendation Banner -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <div class="card border-0 shadow bg-primary text-white p-4">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h4 class="fw-bold mb-1"><i class="bi bi-robot me-2"></i>AI 最佳清洗策略</h4>
+                                        <p class="mb-0 opacity-75" id="strategyReason">正在分析结论...</p>
+                                    </div>
+                                    <div>
+                                        <button class="btn btn-light btn-lg fw-bold shadow-sm" id="btnLaunchCleaning">
+                                            <i class="bi bi-lightning-fill me-1 text-warning"></i>立即按此方案清洗
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-4">
+                        <!-- Security Radar Card -->
+                        <div class="col-md-6">
+                            <div class="card h-100 border-0 shadow-sm">
+                                <div class="card-header bg-dark text-white fw-bold">
+                                    <i class="bi bi-shield-lock me-2"></i>安全审计报告
+                                </div>
+                                <div class="card-body">
+                                    <ul class="list-group list-group-flush" id="securitySpecs">
+                                        <!-- Dynamic content -->
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Structure & Metadata -->
+                        <div class="col-md-6">
+                            <div class="card h-100 border-0 shadow-sm">
+                                <div class="card-header bg-secondary text-white fw-bold">
+                                    <i class="bi bi-info-circle me-2"></i>结构与元数据
+                                </div>
+                                <div class="card-body">
+                                    <ul class="list-group list-group-flush" id="structureSpecs">
+                                        <!-- Dynamic content -->
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Permissions Grid -->
+                        <div class="col-12">
+                            <div class="card border-0 shadow-sm">
+                                <div class="card-header bg-primary text-white fw-bold">
+                                    <i class="bi bi-key me-2"></i>详细权限透视 (Permissions Matrix)
+                                </div>
+                                <div class="card-body">
+                                    <div class="row row-cols-2 row-cols-md-4 g-3" id="permsMatrix">
+                                        <!-- Dynamic permission badges -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Verification Log -->
+                        <div class="col-md-6">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-header bg-success text-white fw-bold">
+                                    <i class="bi bi-check-all me-2"></i>推理验证 (Inference)
+                                </div>
+                                <div class="card-body bg-light p-3">
+                                    <pre id="verifyLog" class="x-small font-monospace mb-0"></pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- NEW: Forensic Findings Panel -->
+                        <div class="col-md-6">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-header bg-danger text-white fw-bold">
+                                    <i class="bi bi-fingerprint me-2"></i>隐形追踪痕迹 (Forensics)
+                                </div>
+                                <div class="card-body p-3">
+                                    <div id="forensicFindings" class="small">
+                                        <!-- Dynamic forensic data -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const dropZone = document.getElementById('analyzerDropZone');
+    const fileInput = document.getElementById('analyzerFileInput');
+
+    dropZone.onclick = () => fileInput.click();
+
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Show loading state
+        dropZone.innerHTML = '<div class="spinner-border text-primary"></div><h5 class="mt-3">正在进行取证扫描...</h5>';
+
+        try {
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            renderAnalysis(data);
+        } catch (err) {
+            alert('分析失败');
+        } finally {
+            dropZone.innerHTML = '<i class="bi bi-search fs-1 text-primary"></i><h5 class="mt-3">上传 PDF 进行深度探测</h5>';
+        }
+    };
+
+    function renderAnalysis(data) {
+        if (data.status === 'error') {
+            alert(data.error_msg);
+            return;
+        }
+
+        document.getElementById('analysisResult').style.display = 'block';
+
+        // Render Strategy Recommendation
+        const rec = data.recommendation;
+        document.getElementById('strategyReason').innerText = rec.reason;
+        
+        // Link to Cleaning Page (Auto-fill via URL params or session)
+        const btnLaunch = document.getElementById('btnLaunchCleaning');
+        btnLaunch.onclick = () => {
+            // 这里我们采用简单方案：将参数存入 sessionStorage，跳转后首页自动读取
+            sessionStorage.setItem('smart_clean_config', JSON.stringify({
+                mode: rec.recommended_mode,
+                text_to_remove: rec.text_to_remove,
+                threshold: rec.threshold,
+                do_header_clean: rec.do_header_clean,
+                do_redaction: rec.do_redaction
+            }));
+            window.location.href = '/';
+        };
+
+        // Render Security
+        const sec = data.security;
+        const secList = document.getElementById('securitySpecs');
+        secList.innerHTML = `
+            <li class="list-group-item d-flex justify-content-between"><span>是否加密</span> <span class="badge ${sec.is_encrypted ? 'bg-danger':'bg-success'}">${sec.is_encrypted ? '已锁定':'未加密'}</span></li>
+            <li class="list-group-item d-flex justify-content-between"><span>加密算法</span> <span class="fw-bold">${sec.encryption_info}</span></li>
+            <li class="list-group-item d-flex justify-content-between"><span>用户认证</span> <span class="badge ${sec.authenticated ? 'bg-success':'bg-warning'}">${sec.authenticated ? '已通行':'未认证'}</span></li>
+        `;
+
+        // Render Structure
+        const struct = data.structure;
+        const meta = data.metadata;
+        const structList = document.getElementById('structureSpecs');
+        structList.innerHTML = `
+            <li class="list-group-item d-flex justify-content-between"><span>总页数</span> <span class="fw-bold">${struct.page_count}</span></li>
+            <li class="list-group-item d-flex justify-content-between"><span>PDF 版本</span> <span class="fw-bold">${struct.pdf_version}</span></li>
+            <li class="list-group-item d-flex justify-content-between"><span>生成器</span> <span class="fw-bold">${meta.producer || 'Unknown'}</span></li>
+        `;
+
+        // Render Permissions
+        const perms = sec.permissions_decoded;
+        const matrix = document.getElementById('permsMatrix');
+        matrix.innerHTML = '';
+        for (const [key, val] of Object.entries(perms)) {
+            const div = document.createElement('div');
+            div.className = 'col';
+            div.innerHTML = `
+                <div class="p-2 border rounded text-center ${val ? 'bg-success-subtle text-success':'bg-danger-subtle text-danger'}">
+                    <i class="bi ${val ? 'bi-check-circle-fill':'bi-x-circle-fill'}"></i>
+                    <div style="font-size: 10px; font-weight: bold;">${key.toUpperCase()}</div>
+                </div>
+            `;
+            matrix.appendChild(div);
+        }
+
+        // Render Verification
+        const verify = data.verification;
+        document.getElementById('verifyLog').innerText = JSON.stringify(verify, null, 2);
+
+        // Render Forensics (NEW)
+        const forensicPanel = document.getElementById('forensicFindings');
+        forensicPanel.innerHTML = '';
+        const forens = data.forensics;
+        
+        if (forens.hidden_text_found.length > 0) {
+            let html = '<div class="alert alert-danger py-2 mb-2"><i class="bi bi-exclamation-triangle-fill me-1"></i>检测到隐形追踪指纹!</div>';
+            forens.hidden_text_found.forEach(pg => {
+                pg.findings.forEach(f => {
+                    html += `<div class="p-2 border-bottom x-small">
+                        <span class="badge bg-secondary me-1">P${pg.page}</span> 
+                        <span class="text-danger fw-bold">${f.reason}</span>: 
+                        <code class="text-dark bg-light px-1">${f.text}</code>
+                    </div>`;
+                });
+            });
+            forensicPanel.innerHTML = html;
+        } else {
+            forensicPanel.innerHTML = '<div class="alert alert-success py-2"><i class="bi bi-check-circle-fill me-1"></i>未发现隐形追踪文字。</div>';
+        }
+
+        // Render Traces (PieceInfo etc)
+        if (forens.processing_traces.length > 0) {
+            forensicPanel.innerHTML += `<div class="mt-3 text-muted x-small">
+                <strong>软件加工痕迹 (Metadata Traces):</strong><br>
+                找到 ${forens.processing_traces.length} 个专有对象 (XREF: ${forens.processing_traces.map(t => t.xref).join(', ')})
+            </div>`;
+        }
+    }
+</script>
+{% endblock %}

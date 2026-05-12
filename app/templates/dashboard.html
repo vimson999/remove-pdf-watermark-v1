@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}操作仪表盘 - PDF Smart Tool{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card shadow-sm border-0">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center">
+                    <div>
+                        <h3 class="fw-bold text-primary mb-1">系统操作痕迹</h3>
+                        <p class="text-muted mb-0">实时追踪 PDF 文件的解析、拆分、清洗与下载活动。</p>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-primary rounded-pill px-3 py-2">最近 50 条记录</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card shadow-sm border-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-4">时间</th>
+                                <th>操作类型</th>
+                                <th>原始文件</th>
+                                <th>关键参数</th>
+                                <th>状态</th>
+                                <th class="pe-4">结果/详情</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for log in logs %}
+                            <tr>
+                                <td class="ps-4 small text-muted">{{ log.timestamp }}</td>
+                                <td>
+                                    {% if log.operation_type == 'ANALYSIS' %}
+                                        <span class="badge bg-info-subtle text-info border border-info">深度解析</span>
+                                    {% elif log.operation_type == 'SPLIT' %}
+                                        <span class="badge bg-success-subtle text-success border border-success">智能拆分</span>
+                                    {% elif log.operation_type == 'CLEAN_SUBMIT' %}
+                                        <span class="badge bg-primary-subtle text-primary border border-primary">清洗任务</span>
+                                    {% elif log.operation_type == 'DOWNLOAD' %}
+                                        <span class="badge bg-warning-subtle text-warning border border-warning">文件下载</span>
+                                    {% else %}
+                                        <span class="badge bg-light text-dark border">{{ log.operation_type }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="fw-bold small">{{ log.source_file }}</td>
+                                <td>
+                                    <code class="x-small text-secondary">{{ log.params }}</code>
+                                </td>
+                                <td>
+                                    {% if log.status == 'SUCCESS' %}
+                                        <i class="bi bi-check-circle-fill text-success me-1"></i>成功
+                                    {% elif log.status == 'ERROR' %}
+                                        <i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>失败
+                                    {% elif log.status == 'PENDING' %}
+                                        <i class="bi bi-clock-history text-primary me-1"></i>处理中
+                                    {% else %}
+                                        {{ log.status }}
+                                    {% endif %}
+                                </td>
+                                <td class="pe-4 small text-truncate" style="max-width: 250px;" title="{{ log.result_info }}">
+                                    {{ log.result_info }}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center py-5 text-muted">
+                                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>
+                                    暂无操作记录
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .x-small { font-size: 0.75rem; }
+</style>
+{% endblock %}

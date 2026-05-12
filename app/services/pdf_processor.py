@@ -85,6 +85,122 @@ def _get_ocr_provider(engine_type: str) -> Optional[OCRProvider]:
 
 # --- Core Processing Logic ---
 
+# --- Template Matching for Persistent Watermarks ---
+
+_watermark_templates: List[Dict] = []
+
+def _load_templates():
+    global _watermark_templates
+    if not _watermark_templates:
+        # Determine resource path relative to this file (app/services/pdf_processor.py)
+        # app/services/../../app/resources/watermarks
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        resource_dir = os.path.join(base_dir, "resources", "watermarks")
+        
+        possible_templates = ["water-1.png", "water-2.png", "water-mark-3.png"]
+        for name in possible_templates:
+            tmpl_path = os.path.join(resource_dir, name)
+            if os.path.exists(tmpl_path):
+                tmpl = cv2.imread(tmpl_path, cv2.IMREAD_COLOR)
+                if tmpl is not None:
+                    _watermark_templates.append({"name": name, "img": tmpl})
+                    logger.info(f"Loaded watermark template: {name} from {resource_dir}")
+            else:
+                # Fallback to root for legacy support or local testing
+                if os.path.exists(name):
+                    tmpl = cv2.imread(name, cv2.IMREAD_COLOR)
+                    if tmpl is not None:
+                        _watermark_templates.append({"name": name, "img": tmpl})
+                        logger.info(f"Loaded watermark template: {name} from root")
+    return _watermark_templates
+
+def apply_template_wipe(img: np.ndarray) -> np.ndarray:
+    """Find and wipe watermarks using multi-scale template matching safely, overlaying custom QR."""
+    templates = _load_templates()
+    if not templates:
+        return img
+        
+    gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Load custom QR
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    custom_qr_path = os.path.join(base_dir, "resources", "watermarks", "my_wechat_qr.png")
+    custom_qr = None
+    if os.path.exists(custom_qr_path):
+        custom_qr = cv2.imread(custom_qr_path, cv2.IMREAD_COLOR)
+    
+    for tmpl_data in templates:
+        try:
+            tmpl_name = tmpl_data["name"]
+            tmpl = tmpl_data["img"]
+            
+            h_tmpl, w_tmpl = tmpl.shape[:2]
+            gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+            
+            # Multi-scale matching
+            scales = [0.25, 0.3, 0.35, 0.4, 0.5, 0.75, 1.0]
+            
+            best_val = -1
+            best_loc = None
+            best_scale = None
+            best_h, best_w = 0, 0
+            
+            for scale in scales:
+                # Use fx and fy to avoid rounding distortions
+                t = cv2.resize(gray_tmpl, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                curr_h, curr_w = t.shape[:2]
+                
+                if curr_h > img.shape[0] or curr_w > img.shape[1] or curr_h < 10 or curr_w < 10:
+                    continue
+                    
+                res = cv2.matchTemplate(gray_img, t, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                
+                if max_val > best_val:
+                    best_val = max_val
+                    best_loc = max_loc
+                    best_scale = scale
+                    best_h, best_w = curr_h, curr_w
+            
+            # Safe threshold logic
+            # Lowering the threshold to 0.32 for QR codes because PDF rendering artifacts
+            # at 200 DPI can occasionally chop off the top of the original QR code,
+            # drastically reducing the match score. 0.32 is still well above the noise floor (~0.15).
+            threshold = 0.45 if w_tmpl > h_tmpl * 2 else 0.32
+            
+            if best_val >= threshold and best_loc is not None:
+                # The matched size might be slightly smaller than the actual rendered QR code.
+                # If we don't obliterate the outer 'finder patterns' of the old QR code,
+                # scanners will still read the old one via error correction!
+                # We expand the bounding box by 20% on ALL sides (1.4x total size).
+                margin_w = int(best_w * 0.20)
+                margin_h = int(best_h * 0.20)
+                
+                wipe_x1 = max(0, best_loc[0] - margin_w)
+                wipe_y1 = max(0, best_loc[1] - margin_h)
+                wipe_x2 = min(img.shape[1], best_loc[0] + best_w + margin_w)
+                wipe_y2 = min(img.shape[0], best_loc[1] + best_h + margin_h)
+                
+                box_w = wipe_x2 - wipe_x1
+                box_h = wipe_y2 - wipe_y1
+                
+                if box_w <= 0 or box_h <= 0:
+                    continue
+                
+                # 1. Wipe the expanded area to pure white (Obliterate old QR completely)
+                img[wipe_y1:wipe_y2, wipe_x1:wipe_x2] = [255, 255, 255]
+                
+                # 2. Overlay custom QR if applicable
+                is_qr_template = tmpl_name in ["water-1.png", "water-mark-3.png"]
+                if is_qr_template and custom_qr is not None:
+                    # Resize custom QR to perfectly fit this newly enlarged box
+                    resized_qr = cv2.resize(custom_qr, (box_w, box_h), interpolation=cv2.INTER_AREA)
+                    img[wipe_y1:wipe_y2, wipe_x1:wipe_x2] = resized_qr
+                
+        except Exception as e:
+            logger.error(f"Template matching failed: {e}")
+    return img
+
 # --- Modular Cleaning Strategies ---
 
 def apply_global_bleach(img: np.ndarray, threshold: int) -> np.ndarray:
@@ -113,6 +229,15 @@ def apply_footer_wipe(img: np.ndarray) -> np.ndarray:
     img[h - footer_h : h, w - footer_w : w] = [255, 255, 255]
     return img
 
+def apply_red_text_clean(img: np.ndarray) -> np.ndarray:
+    """Wipe out reddish pixels typical of these specific watermarks."""
+    # BGR format: R is index 2, G is 1, B is 0
+    b, g, r = cv2.split(img)
+    # Detect high red, low green/blue
+    red_mask = (r > 160) & (g < 120) & (b < 120)
+    img[red_mask] = [255, 255, 255]
+    return img
+
 def apply_ms_side_clean(img: np.ndarray) -> np.ndarray:
     """Morgan Stanley specific: Vertical side bars or disclaimer text."""
     h, w = img.shape[:2]
@@ -135,13 +260,17 @@ def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
     # 1. Global Bleach
     img = apply_global_bleach(img, threshold)
     
-    # 2. Institution-Specific Wipes
+    # 2. Template Matching Wipe (New!)
+    img = apply_template_wipe(img)
+    
+    # 3. Institution-Specific Wipes
     if institution == "ms":
         img = apply_ms_side_clean(img)
     elif institution == "nomura":
         img = apply_nomura_header_strip(img)
     
-    # 3. Common Wipes
+    # 4. Common Wipes
+    img = apply_red_text_clean(img)
     if do_header_clean and institution != "nomura": # Nomura handled above
         img = apply_header_clean(img)
     
@@ -151,7 +280,7 @@ def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
 
 def _process_page_parallel(page_index: int, img_bytes: bytes, threshold: int, 
                           do_header_clean: bool, do_ocr: bool, ocr_engine: str = "easyocr",
-                          institution: str = "unknown") -> Dict:
+                          institution: str = "unknown", orig_dimensions: Tuple[float, float] = (0, 0)) -> Dict:
     start_time = time.time()
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -194,7 +323,8 @@ def _process_page_parallel(page_index: int, img_bytes: bytes, threshold: int,
         'img_data': buffer.tobytes(),
         'ocr_results': ocr_results,
         'metrics': {'bleach': bleach_duration, 'ocr': ocr_duration, 'total': time.time() - start_time},
-        'dimensions': (img.shape[1], img.shape[0])
+        'pixel_dimensions': (img.shape[1], img.shape[0]),
+        'orig_dimensions': orig_dimensions
     }
 
 class PDFProcessor:
@@ -244,7 +374,7 @@ class PDFProcessor:
         if do_redaction:
             if progress_callback: progress_callback("正在精准擦除文本对象...", 5)
             phrases = [p.strip() for p in text_to_remove.replace('，', ',').split(',') if p.strip()]
-            common_patterns = ["知识星球", "VX:", "FCCNN88", "Evaluation Only"]
+            common_patterns = ["知识星球", "VX:", "FCCNN88", "Evaluation Only", "西湖有鱼快来吃", "前沿信息收录", "一等研报"]
             all_phrases = list(set(phrases + common_patterns))
             for page in doc:
                 for phrase in all_phrases:
@@ -262,7 +392,8 @@ class PDFProcessor:
         for i in range(total_pages):
             page = doc[i]
             rect = page.rect
-            orig_max_dim = max(rect.width, rect.height)
+            orig_w, orig_h = rect.width, rect.height
+            orig_max_dim = max(orig_w, orig_h)
             projected_pixels = orig_max_dim * (DEFAULT_DPI / 72)
             
             if projected_pixels > MAX_SAFE_PIXELS:
@@ -272,7 +403,7 @@ class PDFProcessor:
 
             pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB)
             has_native_text = len(page.get_text().strip()) > 0
-            tasks.append((i, pix.tobytes("png"), has_native_text))
+            tasks.append((i, pix.tobytes("png"), has_native_text, (orig_w, orig_h)))
             del pix
 
         results_map = {}
@@ -281,8 +412,8 @@ class PDFProcessor:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
                 executor.submit(_process_page_parallel, idx, img_data, threshold, 
-                               do_header_clean, (do_ocr and has_text), ocr_engine, institution): idx 
-                for idx, img_data, has_text in tasks
+                               do_header_clean, (do_ocr and has_text), ocr_engine, institution, orig_dims): idx 
+                for idx, img_data, has_text, orig_dims in tasks
             }
             
             for future in as_completed(future_to_index):
@@ -303,13 +434,26 @@ class PDFProcessor:
         for i in range(total_pages):
             if i not in results_map: continue
             res = results_map[i]
-            w, h = res['dimensions']
-            new_page = out_doc.new_page(width=w, height=h)
-            new_page.insert_image(fitz.Rect(0, 0, w, h), stream=res['img_data'])
+            pw, ph = res['pixel_dimensions']
+            ow, oh = res['orig_dimensions']
+            
+            new_page = out_doc.new_page(width=ow, height=oh)
+            new_page.insert_image(fitz.Rect(0, 0, ow, oh), stream=res['img_data'])
+            
+            # Scale factor from Pixels to Points
+            scale_x = ow / pw
+            scale_y = oh / ph
+            
             for text_obj in res.get('ocr_results', []):
                 bbox = text_obj['bbox']
-                new_page.insert_textbox(fitz.Rect(bbox[0][0], bbox[0][1], bbox[2][0], bbox[2][1]), 
-                                       text_obj['text'], fontsize=11, render_mode=3)
+                # bbox is [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+                point_rect = fitz.Rect(
+                    bbox[0][0] * scale_x, 
+                    bbox[0][1] * scale_y, 
+                    bbox[2][0] * scale_x, 
+                    bbox[2][1] * scale_y
+                )
+                new_page.insert_textbox(point_rect, text_obj['text'], fontsize=11, render_mode=3)
         
         out_doc.save(output_path, garbage=4, deflate=True)
         out_doc.close()
