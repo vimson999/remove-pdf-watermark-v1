@@ -88,6 +88,7 @@ def _get_ocr_provider(engine_type: str) -> Optional[OCRProvider]:
 # --- Template Matching for Persistent Watermarks ---
 
 _watermark_templates: List[Dict] = []
+_custom_qr: Optional[np.ndarray] = None
 
 def _load_templates():
     global _watermark_templates
@@ -114,21 +115,45 @@ def _load_templates():
                         logger.info(f"Loaded watermark template: {name} from root")
     return _watermark_templates
 
+def _load_custom_qr() -> Optional[np.ndarray]:
+    global _custom_qr
+    if _custom_qr is None:
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        custom_qr_path = os.path.join(base_dir, "resources", "watermarks", "my_wechat_qr.png")
+        if os.path.exists(custom_qr_path):
+            _custom_qr = cv2.imread(custom_qr_path, cv2.IMREAD_COLOR)
+    return _custom_qr
+
+def _paste_custom_qr(img: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> None:
+    custom_qr = _load_custom_qr()
+    if custom_qr is None:
+        return
+
+    target_w = x2 - x1
+    target_h = y2 - y1
+    if target_w <= 0 or target_h <= 0:
+        return
+
+    qr_h, qr_w = custom_qr.shape[:2]
+    scale = min(target_w / qr_w, target_h / qr_h)
+    if scale <= 0:
+        return
+
+    paste_w = max(1, min(target_w, int(qr_w * scale)))
+    paste_h = max(1, min(target_h, int(qr_h * scale)))
+    resized_qr = cv2.resize(custom_qr, (paste_w, paste_h), interpolation=cv2.INTER_AREA)
+    offset_x = x1 + (target_w - paste_w) // 2
+    offset_y = y1 + (target_h - paste_h) // 2
+    img[offset_y:offset_y + paste_h, offset_x:offset_x + paste_w] = resized_qr
+
 def apply_template_wipe(img: np.ndarray) -> np.ndarray:
-    """Find and wipe watermarks using multi-scale template matching safely, overlaying custom QR."""
+    """Find and wipe known watermark templates using multi-scale template matching."""
     templates = _load_templates()
     if not templates:
         return img
         
     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Load custom QR
-    base_dir = os.path.dirname(os.path.dirname(__file__))
-    custom_qr_path = os.path.join(base_dir, "resources", "watermarks", "my_wechat_qr.png")
-    custom_qr = None
-    if os.path.exists(custom_qr_path):
-        custom_qr = cv2.imread(custom_qr_path, cv2.IMREAD_COLOR)
-    
+
     for tmpl_data in templates:
         try:
             tmpl_name = tmpl_data["name"]
@@ -173,6 +198,7 @@ def apply_template_wipe(img: np.ndarray) -> np.ndarray:
                 # If we don't obliterate the outer 'finder patterns' of the old QR code,
                 # scanners will still read the old one via error correction!
                 # We expand the bounding box by 20% on ALL sides (1.4x total size).
+                is_qr_template = tmpl_name in ["water-1.png", "water-mark-3.png"]
                 margin_w = int(best_w * 0.20)
                 margin_h = int(best_h * 0.20)
                 
@@ -180,6 +206,8 @@ def apply_template_wipe(img: np.ndarray) -> np.ndarray:
                 wipe_y1 = max(0, best_loc[1] - margin_h)
                 wipe_x2 = min(img.shape[1], best_loc[0] + best_w + margin_w)
                 wipe_y2 = min(img.shape[0], best_loc[1] + best_h + margin_h)
+                if is_qr_template:
+                    wipe_y2 = min(img.shape[0], best_loc[1] + best_h + int(best_h * 0.75))
                 
                 box_w = wipe_x2 - wipe_x1
                 box_h = wipe_y2 - wipe_y1
@@ -187,16 +215,12 @@ def apply_template_wipe(img: np.ndarray) -> np.ndarray:
                 if box_w <= 0 or box_h <= 0:
                     continue
                 
-                # 1. Wipe the expanded area to pure white (Obliterate old QR completely)
+                # Wipe the expanded area to pure white.
                 img[wipe_y1:wipe_y2, wipe_x1:wipe_x2] = [255, 255, 255]
-                
-                # 2. Overlay custom QR if applicable
-                is_qr_template = tmpl_name in ["water-1.png", "water-mark-3.png"]
-                if is_qr_template and custom_qr is not None:
-                    # Resize custom QR to perfectly fit this newly enlarged box
-                    resized_qr = cv2.resize(custom_qr, (box_w, box_h), interpolation=cv2.INTER_AREA)
-                    img[wipe_y1:wipe_y2, wipe_x1:wipe_x2] = resized_qr
-                
+                if is_qr_template:
+                    qr_y2 = min(img.shape[0], best_loc[1] + best_h + margin_h)
+                    _paste_custom_qr(img, wipe_x1, wipe_y1, wipe_x2, qr_y2)
+
         except Exception as e:
             logger.error(f"Template matching failed: {e}")
     return img
@@ -229,13 +253,71 @@ def apply_footer_wipe(img: np.ndarray) -> np.ndarray:
     img[h - footer_h : h, w - footer_w : w] = [255, 255, 255]
     return img
 
-def apply_red_text_clean(img: np.ndarray) -> np.ndarray:
-    """Wipe out reddish pixels typical of these specific watermarks."""
-    # BGR format: R is index 2, G is 1, B is 0
-    b, g, r = cv2.split(img)
-    # Detect high red, low green/blue
-    red_mask = (r > 160) & (g < 120) & (b < 120)
-    img[red_mask] = [255, 255, 255]
+def apply_lower_left_watermark_clean(img: np.ndarray) -> np.ndarray:
+    """Remove compact QR/logo artifacts that appear in the lower-left page footer."""
+    h, w = img.shape[:2]
+    y_start = int(h * 0.72)
+    x_end = int(w * 0.36)
+    roi = img[y_start:h, 0:x_end]
+    if roi.size == 0:
+        return img
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    dark_mask = (gray < 150).astype(np.uint8) * 255
+    dark_mask = cv2.dilate(dark_mask, np.ones((3, 3), np.uint8), iterations=1)
+
+    components, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+    for label in range(1, components):
+        x, y, comp_w, comp_h, area = stats[label]
+        abs_y = y_start + y
+        if area <= 0:
+            continue
+        aspect = comp_w / max(comp_h, 1)
+        is_footer_square = (
+            abs_y > int(h * 0.86) and
+            x < int(w * 0.18) and
+            35 <= comp_w <= int(w * 0.12) and
+            35 <= comp_h <= int(h * 0.12) and
+            0.70 <= aspect <= 1.35 and
+            area >= 700
+        )
+        if is_footer_square:
+            pad = max(6, int(max(comp_w, comp_h) * 0.08))
+            x1 = max(0, x - pad)
+            y1 = max(0, y_start + y - pad)
+            x2 = min(w, x + comp_w + pad)
+            qr_y2 = min(h, y_start + y + comp_h + pad)
+            wipe_y2 = min(h, y_start + y + comp_h + int(comp_h * 0.55))
+            img[y1:wipe_y2, x1:x2] = [255, 255, 255]
+            _paste_custom_qr(img, x1, y1, x2, qr_y2)
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    color_mask = ((saturation > 45) & (value < 245)).astype(np.uint8) * 255
+    color_mask = cv2.dilate(color_mask, np.ones((3, 3), np.uint8), iterations=1)
+
+    components, labels, stats, _ = cv2.connectedComponentsWithStats(color_mask, connectivity=8)
+    for label in range(1, components):
+        x, y, comp_w, comp_h, area = stats[label]
+        abs_y = y_start + y
+        if area <= 0:
+            continue
+        is_footer_logo = (
+            abs_y > int(h * 0.93) and
+            x < int(w * 0.09) and
+            18 <= comp_w <= int(w * 0.09) and
+            8 <= comp_h <= int(h * 0.06) and
+            area <= 3000
+        )
+        if is_footer_logo:
+            pad = 8
+            x1 = max(0, x - pad)
+            y1 = max(0, y_start + y - pad)
+            x2 = min(w, x + comp_w + pad)
+            y2 = min(h, y_start + y + comp_h + pad)
+            img[y1:y2, x1:x2] = [255, 255, 255]
+
     return img
 
 def apply_ms_side_clean(img: np.ndarray) -> np.ndarray:
@@ -262,6 +344,7 @@ def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
     
     # 2. Template Matching Wipe (New!)
     img = apply_template_wipe(img)
+    img = apply_lower_left_watermark_clean(img)
     
     # 3. Institution-Specific Wipes
     if institution == "ms":
@@ -270,7 +353,6 @@ def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
         img = apply_nomura_header_strip(img)
     
     # 4. Common Wipes
-    img = apply_red_text_clean(img)
     if do_header_clean and institution != "nomura": # Nomura handled above
         img = apply_header_clean(img)
     
