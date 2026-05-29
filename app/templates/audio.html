@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+
+{% block title %}音频批量裁剪 - PDF Smart Tool{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-dark text-white fw-bold py-3">
+                    <i class="bi bi-soundwave me-2"></i>音频批量裁剪
+                </div>
+                <div class="card-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">输入目录</label>
+                        <div class="border rounded bg-light p-2 folder-tree" id="inputTree">
+                            <div class="text-muted small p-2">正在读取目录树...</div>
+                        </div>
+                        <div class="form-text text-truncate" id="inputPathLabel">未选择</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">输出目录</label>
+                        <div class="border rounded bg-light p-2 folder-tree" id="outputTree">
+                            <div class="text-muted small p-2">正在读取目录树...</div>
+                        </div>
+                        <div class="form-text text-truncate" id="outputPathLabel">未选择</div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <label class="form-label fw-bold">裁掉开头</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="trimStart" min="0" step="1" value="11">
+                                <span class="input-group-text">秒</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-bold">裁掉结尾</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="trimEnd" min="0" step="1" value="11">
+                                <span class="input-group-text">秒</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-check form-switch mt-4">
+                        <input class="form-check-input" type="checkbox" id="overwrite">
+                        <label class="form-check-label fw-bold" for="overwrite">覆盖已有输出文件</label>
+                    </div>
+                    <button class="btn btn-dark btn-lg w-100 mt-4 shadow-sm" id="startAudio">
+                        <i class="bi bi-play-fill me-1"></i>开始裁剪音频
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-white fw-bold py-3 d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-activity me-2 text-dark"></i>任务进度</span>
+                    <span class="badge bg-light text-dark border" id="jobState">未开始</span>
+                </div>
+                <div class="card-body p-4">
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between small text-muted mb-1">
+                            <span id="jobMessage">等待启动任务</span>
+                            <span id="jobCounter">0 / 0</span>
+                        </div>
+                        <div class="progress" style="height: 12px;">
+                            <div class="progress-bar bg-dark" id="jobProgress" style="width: 0%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between small text-muted mt-2">
+                            <span id="currentStage">当前文件：未开始</span>
+                            <span id="filePercent">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 text-center mb-4">
+                        <div class="col-4">
+                            <div class="border rounded p-3 bg-light">
+                                <div class="fs-4 fw-bold text-success" id="successCount">0</div>
+                                <div class="small text-muted">成功</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="border rounded p-3 bg-light">
+                                <div class="fs-4 fw-bold text-danger" id="failedCount">0</div>
+                                <div class="small text-muted">失败</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="border rounded p-3 bg-light">
+                                <div class="fs-4 fw-bold text-secondary" id="skippedCount">0</div>
+                                <div class="small text-muted">跳过</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="fw-bold mb-0">
+                            <i class="bi bi-music-note-beamed me-2 text-dark"></i>音频队列
+                        </h6>
+                        <span class="badge bg-light text-dark border" id="fileCount">0 个音频</span>
+                    </div>
+                    <div class="list-group list-group-flush border rounded overflow-hidden" id="audioList">
+                        <div class="list-group-item text-center text-muted py-4">请选择输入目录</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .folder-tree { max-height: 260px; overflow: auto; }
+    .folder-node {
+        border: 0;
+        background: transparent;
+        width: 100%;
+        text-align: left;
+        padding: 0.25rem 0.35rem;
+        border-radius: 0.35rem;
+        font-size: 0.875rem;
+    }
+    .folder-node:hover { background: rgba(33, 37, 41, 0.08); }
+    .folder-node.active { background: var(--bs-dark); color: white; }
+    .folder-children {
+        margin-left: 1rem;
+        border-left: 1px solid #dee2e6;
+        padding-left: 0.35rem;
+    }
+</style>
+<script>
+const startBtn = document.getElementById('startAudio');
+let pollTimer = null;
+let selectedAudioCount = 0;
+let queuedFiles = [];
+let selectedInputDir = '';
+let selectedOutputDir = '';
+let folderPaths = new Set();
+
+function statusBadge(status) {
+    if (status === 'WAITING') return '<span class="badge bg-light text-dark border">等待</span>';
+    if (status === 'RUNNING') return '<span class="badge bg-dark">处理中</span>';
+    if (status === 'SUCCESS') return '<span class="badge bg-success">成功</span>';
+    if (status === 'SKIPPED') return '<span class="badge bg-secondary">跳过</span>';
+    if (status === 'FAILED' || status === 'ERROR') return '<span class="badge bg-danger">失败</span>';
+    return `<span class="badge bg-light text-dark border">${status}</span>`;
+}
+
+function renderAudioQueue(files, resultMap = {}, currentFile = '', currentPercent = 0) {
+    const list = document.getElementById('audioList');
+    if (!files || files.length === 0) {
+        list.innerHTML = '<div class="list-group-item text-center text-muted py-4">这个目录里没有音频文件</div>';
+        return;
+    }
+
+    list.innerHTML = files.map(file => {
+        const result = resultMap[file.name];
+        const isCurrent = file.name === currentFile && !result;
+        const status = result ? result.status : (isCurrent ? 'RUNNING' : 'WAITING');
+        const percent = result ? 100 : (isCurrent ? currentPercent : 0);
+        const output = result ? (result.output || result.message || '') : '';
+        const duration = result && result.duration ? `${result.duration}s` : '';
+        const activeClass = isCurrent ? 'border-start border-4 border-dark bg-light' : '';
+        const mutedInfo = output || `${file.size_mb} MB`;
+
+        return `
+            <div class="list-group-item ${activeClass}">
+                <div class="d-flex justify-content-between gap-3">
+                    <div class="min-w-0 flex-grow-1">
+                        <div class="fw-bold small text-truncate" title="${file.name}">
+                            <i class="bi bi-music-note-beamed text-dark me-2"></i>${file.name}
+                        </div>
+                        <div class="small text-muted text-truncate mt-1" title="${mutedInfo}">${mutedInfo}</div>
+                    </div>
+                    <div class="text-end flex-shrink-0" style="min-width: 96px;">
+                        ${statusBadge(status)}
+                        <div class="small text-muted mt-1">${duration}</div>
+                    </div>
+                </div>
+                <div class="progress mt-2" style="height: 6px;">
+                    <div class="progress-bar bg-dark ${status === 'FAILED' || status === 'ERROR' ? 'bg-danger' : ''}" style="width: ${percent}%"></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function collectPaths(node) {
+    folderPaths.add(node.path);
+    (node.children || []).forEach(collectPaths);
+}
+
+function findNode(node, path) {
+    if (node.path === path) return node;
+    for (const child of node.children || []) {
+        const found = findNode(child, path);
+        if (found) return found;
+    }
+    return null;
+}
+
+function makeTreeHtml(node, role, depth = 0) {
+    const icon = node.children && node.children.length ? 'bi-folder-fill' : 'bi-folder';
+    const button = `
+        <button type="button" class="folder-node" data-role="${role}" data-path="${node.path}" title="${node.path}">
+            <i class="bi ${icon} me-1"></i>${node.name}
+        </button>
+    `;
+    if (!node.children || node.children.length === 0) return button;
+    const children = node.children.map(child => makeTreeHtml(child, role, depth + 1)).join('');
+    const openAttr = depth < 2 ? ' open' : '';
+    return `<details${openAttr}><summary class="d-none"></summary>${button}<div class="folder-children">${children}</div></details>`;
+}
+
+function markSelected(role, path) {
+    document.querySelectorAll(`.folder-node[data-role="${role}"]`).forEach(button => {
+        button.classList.toggle('active', button.dataset.path === path);
+    });
+    const label = document.getElementById(role === 'input' ? 'inputPathLabel' : 'outputPathLabel');
+    const suffix = path && !folderPaths.has(path) ? '（将自动创建）' : '';
+    label.innerText = path ? `${path}${suffix}` : '未选择';
+}
+
+async function selectInputDir(path, autoMapOutput = true) {
+    selectedInputDir = path;
+    markSelected('input', path);
+    if (autoMapOutput && path.startsWith('音频/待清理/')) {
+        selectedOutputDir = `音频/清理完毕/${path.slice('音频/待清理/'.length)}`;
+        markSelected('output', selectedOutputDir);
+    } else if (autoMapOutput && path === '音频/待清理') {
+        selectedOutputDir = '音频/清理完毕';
+        markSelected('output', selectedOutputDir);
+    }
+    await loadAudioList();
+}
+
+function selectOutputDir(path) {
+    selectedOutputDir = path;
+    markSelected('output', path);
+}
+
+async function loadFolderTree() {
+    const response = await fetch('/api/folder-tree');
+    const data = await response.json();
+    if (!data.success) return;
+
+    folderPaths = new Set();
+    collectPaths(data.tree);
+
+    const inputRoot = findNode(data.tree, '音频/待清理') || findNode(data.tree, '音频') || data.tree;
+    const outputRoot = findNode(data.tree, '音频/清理完毕') || findNode(data.tree, '音频') || data.tree;
+    document.getElementById('inputTree').innerHTML = makeTreeHtml(inputRoot, 'input');
+    document.getElementById('outputTree').innerHTML = makeTreeHtml(outputRoot, 'output');
+
+    document.querySelectorAll('.folder-node').forEach(button => {
+        button.addEventListener('click', async () => {
+            if (button.dataset.role === 'input') {
+                await selectInputDir(button.dataset.path);
+            } else {
+                selectOutputDir(button.dataset.path);
+            }
+        });
+    });
+
+    const defaultInput = folderPaths.has('音频/待清理/0514') ? '音频/待清理/0514' : '音频/待清理';
+    const defaultOutput = folderPaths.has('音频/清理完毕/0514') ? '音频/清理完毕/0514' : '音频/清理完毕/0514';
+    selectedOutputDir = defaultOutput;
+    markSelected('output', selectedOutputDir);
+    await selectInputDir(defaultInput, false);
+}
+
+async function loadAudioList() {
+    const list = document.getElementById('audioList');
+    const count = document.getElementById('fileCount');
+    list.innerHTML = '<div class="list-group-item text-center text-muted py-4">正在递归读取目录...</div>';
+    selectedAudioCount = 0;
+    queuedFiles = [];
+
+    try {
+        const response = await fetch(`/api/local-audios?dir=${encodeURIComponent(selectedInputDir)}`);
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || '读取失败');
+        selectedAudioCount = data.count;
+        queuedFiles = data.files;
+        count.innerText = `${data.count} 个音频`;
+        renderAudioQueue(queuedFiles);
+    } catch (error) {
+        count.innerText = '读取失败';
+        list.innerHTML = `<div class="list-group-item text-center text-danger py-4">${error.message}</div>`;
+    }
+}
+
+function renderJob(job) {
+    const total = job.total || 0;
+    const current = job.current || 0;
+    const percent = total ? Math.round((current / total) * 100) : 0;
+    document.getElementById('jobState').innerText = job.state;
+    document.getElementById('jobMessage').innerText = job.message || '';
+    document.getElementById('jobCounter').innerText = `${current} / ${total}`;
+    document.getElementById('jobProgress').style.width = `${job.overall_percent || percent}%`;
+    document.getElementById('currentStage').innerText = `当前文件：${job.current_stage || job.current_file || '未开始'}`;
+    document.getElementById('filePercent').innerText = `${job.current_file_percent || 0}%`;
+    document.getElementById('successCount').innerText = job.success || 0;
+    document.getElementById('failedCount').innerText = job.failed || 0;
+    document.getElementById('skippedCount').innerText = job.skipped || 0;
+
+    const resultMap = {};
+    (job.files || []).forEach(file => resultMap[file.name] = file);
+    renderAudioQueue(queuedFiles, resultMap, job.current_file, job.current_file_percent || 0);
+
+    if (job.state === 'FINISHED') {
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始裁剪音频';
+        clearInterval(pollTimer);
+    }
+}
+
+async function pollJob(jobId) {
+    const response = await fetch(`/api/batch-clean/status/${jobId}`);
+    const data = await response.json();
+    if (data.success) renderJob(data.job);
+}
+
+startBtn.onclick = async () => {
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>正在启动';
+    renderAudioQueue(queuedFiles);
+
+    const payload = {
+        input_dir: selectedInputDir,
+        output_dir: selectedOutputDir,
+        trim_start: Number(document.getElementById('trimStart').value),
+        trim_end: Number(document.getElementById('trimEnd').value),
+        overwrite: document.getElementById('overwrite').checked
+    };
+
+    if (!selectedInputDir || !selectedOutputDir) {
+        const error = '请先选择输入目录和输出目录。';
+        document.getElementById('jobState').innerText = '启动失败';
+        document.getElementById('jobMessage').innerText = error;
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始裁剪音频';
+        return;
+    }
+
+    if (selectedAudioCount === 0) {
+        const error = '输入目录里没有音频文件。';
+        document.getElementById('jobState').innerText = '启动失败';
+        document.getElementById('jobMessage').innerText = error;
+        document.getElementById('audioList').innerHTML = `<div class="list-group-item text-center text-danger py-4">${error}</div>`;
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始裁剪音频';
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/audio-trim', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || '启动失败');
+
+        startBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>裁剪中';
+        await pollJob(data.job_id);
+        pollTimer = setInterval(() => pollJob(data.job_id), 1500);
+    } catch (error) {
+        alert(error.message);
+        document.getElementById('jobState').innerText = '启动失败';
+        document.getElementById('jobMessage').innerText = error.message;
+        document.getElementById('audioList').innerHTML = `<div class="list-group-item text-center text-danger py-4">${error.message}</div>`;
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始裁剪音频';
+    }
+};
+
+loadFolderTree();
+</script>
+{% endblock %}
