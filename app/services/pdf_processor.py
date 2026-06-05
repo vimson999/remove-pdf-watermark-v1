@@ -89,6 +89,7 @@ def _get_ocr_provider(engine_type: str) -> Optional[OCRProvider]:
 
 _watermark_templates: List[Dict] = []
 _custom_qr: Optional[np.ndarray] = None
+CUSTOM_QR_FILENAME = "my_wechat_qr.png"
 
 def _load_templates():
     global _watermark_templates
@@ -119,7 +120,7 @@ def _load_custom_qr() -> Optional[np.ndarray]:
     global _custom_qr
     if _custom_qr is None:
         base_dir = os.path.dirname(os.path.dirname(__file__))
-        custom_qr_path = os.path.join(base_dir, "resources", "watermarks", "my_wechat_qr.png")
+        custom_qr_path = os.path.join(base_dir, "resources", "watermarks", CUSTOM_QR_FILENAME)
         if os.path.exists(custom_qr_path):
             _custom_qr = cv2.imread(custom_qr_path, cv2.IMREAD_COLOR)
     return _custom_qr
@@ -146,7 +147,15 @@ def _paste_custom_qr(img: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> Non
     offset_y = y1 + (target_h - paste_h) // 2
     img[offset_y:offset_y + paste_h, offset_x:offset_x + paste_w] = resized_qr
 
-def apply_template_wipe(img: np.ndarray) -> np.ndarray:
+def _is_qr_watermark_zone(x: int, y: int, box_w: int, box_h: int, page_w: int, page_h: int) -> bool:
+    """QR watermarks in these reports sit in the lower side bands, not arbitrary body text."""
+    return (
+        y > int(page_h * 0.70) and
+        (x < int(page_w * 0.45) or x + box_w > int(page_w * 0.55))
+    )
+
+def apply_template_wipe(img: np.ndarray, paste_custom_qr: bool = True,
+                        qr_boxes: Optional[List[Tuple[int, int, int, int]]] = None) -> np.ndarray:
     """Find and wipe known watermark templates using multi-scale template matching."""
     templates = _load_templates()
     if not templates:
@@ -199,6 +208,10 @@ def apply_template_wipe(img: np.ndarray) -> np.ndarray:
                 # scanners will still read the old one via error correction!
                 # We expand the bounding box by 20% on ALL sides (1.4x total size).
                 is_qr_template = tmpl_name in ["water-1.png", "water-mark-3.png"]
+                if is_qr_template and not _is_qr_watermark_zone(
+                    best_loc[0], best_loc[1], best_w, best_h, img.shape[1], img.shape[0]
+                ):
+                    continue
                 margin_w = int(best_w * 0.20)
                 margin_h = int(best_h * 0.20)
                 
@@ -214,12 +227,20 @@ def apply_template_wipe(img: np.ndarray) -> np.ndarray:
                 
                 if box_w <= 0 or box_h <= 0:
                     continue
+
+                if is_qr_template:
+                    qr_y2 = min(img.shape[0], best_loc[1] + best_h + margin_h)
+                    qr_patch = img[wipe_y1:qr_y2, wipe_x1:wipe_x2]
+                    if qr_patch.size == 0 or _qr_finder_pattern_count(qr_patch) < 3:
+                        continue
                 
                 # Wipe the expanded area to pure white.
                 img[wipe_y1:wipe_y2, wipe_x1:wipe_x2] = [255, 255, 255]
                 if is_qr_template:
-                    qr_y2 = min(img.shape[0], best_loc[1] + best_h + margin_h)
-                    _paste_custom_qr(img, wipe_x1, wipe_y1, wipe_x2, qr_y2)
+                    if qr_boxes is not None:
+                        qr_boxes.append((wipe_x1, wipe_y1, wipe_x2, qr_y2))
+                    if paste_custom_qr:
+                        _paste_custom_qr(img, wipe_x1, wipe_y1, wipe_x2, qr_y2)
 
         except Exception as e:
             logger.error(f"Template matching failed: {e}")
@@ -253,43 +274,196 @@ def apply_footer_wipe(img: np.ndarray) -> np.ndarray:
     img[h - footer_h : h, w - footer_w : w] = [255, 255, 255]
     return img
 
-def apply_lower_left_watermark_clean(img: np.ndarray) -> np.ndarray:
-    """Remove compact QR/logo artifacts that appear in the lower-left page footer."""
+def apply_footer_red_watermark_clean(img: np.ndarray) -> np.ndarray:
+    """Remove red promotional text only from the physical footer band."""
+    h, _ = img.shape[:2]
+    y_start = int(h * 0.82)
+    roi = img[y_start:h, :]
+    if roi.size == 0:
+        return img
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    b, g, r = cv2.split(roi)
+
+    hsv_red = (((hue < 12) | (hue > 168)) & (saturation > 55) & (value > 80))
+    rgb_red = ((r > 120) & (r > g * 1.25) & (r > b * 1.25))
+    red_mask = (hsv_red | rgb_red).astype(np.uint8) * 255
+    red_mask = cv2.dilate(red_mask, np.ones((3, 3), np.uint8), iterations=1)
+    roi[red_mask > 0] = [255, 255, 255]
+    return img
+
+def _qr_finder_pattern_count(patch: np.ndarray) -> int:
+    gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    dark_mask = (gray < 120).astype(np.uint8) * 255
+    components, _, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+    patch_h, patch_w = gray.shape[:2]
+    side = max(1, min(patch_h, patch_w))
+    corners = {"tl": False, "tr": False, "bl": False}
+
+    for label in range(1, components):
+        x, y, comp_w, comp_h, area = stats[label]
+        if area <= 0:
+            continue
+        aspect = comp_w / max(comp_h, 1)
+        is_finder_like = (
+            0.70 <= aspect <= 1.35 and
+            int(side * 0.10) <= comp_w <= int(side * 0.34) and
+            int(side * 0.10) <= comp_h <= int(side * 0.34) and
+            area >= int(side * side * 0.008)
+        )
+        if not is_finder_like:
+            continue
+
+        center_x = (x + comp_w / 2) / max(patch_w, 1)
+        center_y = (y + comp_h / 2) / max(patch_h, 1)
+        if center_x < 0.36 and center_y < 0.36:
+            corners["tl"] = True
+        elif center_x > 0.64 and center_y < 0.36:
+            corners["tr"] = True
+        elif center_x < 0.36 and center_y > 0.64:
+            corners["bl"] = True
+
+    return sum(corners.values())
+
+def _candidate_qr_boxes_from_component(x: int, y: int, comp_w: int, comp_h: int,
+                                       min_side: int, max_side: int) -> List[Tuple[int, int, int, int]]:
+    side = min(comp_w, comp_h)
+    if side < min_side or side > max_side:
+        return []
+
+    max_span = int(max_side * 1.8)
+    if comp_w > max_span or comp_h > max_span:
+        return []
+
+    candidates = []
+    if 0.72 <= comp_w / max(comp_h, 1) <= 1.38:
+        candidates.append((x, y, comp_w, comp_h))
+
+    square_side = side
+    anchor_xs = [x]
+    anchor_ys = [y]
+    if comp_w > square_side:
+        anchor_xs.extend([x + comp_w - square_side, x + (comp_w - square_side) // 2])
+    if comp_h > square_side:
+        anchor_ys.extend([y + comp_h - square_side, y + (comp_h - square_side) // 2])
+
+    for ax in anchor_xs:
+        for ay in anchor_ys:
+            candidates.append((ax, ay, square_side, square_side))
+
+    deduped = []
+    seen = set()
+    for box in candidates:
+        if box in seen:
+            continue
+        seen.add(box)
+        deduped.append(box)
+    return deduped
+
+def _default_footer_qr_box(img: np.ndarray) -> Tuple[int, int, int, int]:
     h, w = img.shape[:2]
+    side = max(80, int(min(h, w) * 0.065))
+    x1 = int(w * 0.035)
+    y1 = max(0, h - side - int(h * 0.04))
+    return x1, y1, min(w, x1 + side), min(h, y1 + side)
+
+def _paste_qr_on_blank(img: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> None:
+    img[y1:y2, x1:x2] = [255, 255, 255]
+    _paste_custom_qr(img, x1, y1, x2, y2)
+
+def _should_paste_custom_qr(page_number: Optional[int]) -> bool:
+    return page_number is None or page_number % 2 == 0
+
+def _paste_custom_qr_from_candidates(img: np.ndarray,
+                                     qr_boxes: List[Tuple[int, int, int, int]],
+                                     force_default_qr: bool) -> None:
+    h, w = img.shape[:2]
+    for box in qr_boxes:
+        x1, y1, x2, y2 = box
+        if _is_qr_watermark_zone(x1, y1, x2 - x1, y2 - y1, w, h):
+            _paste_qr_on_blank(img, x1, y1, x2, y2)
+            return
+    if force_default_qr:
+        _paste_qr_on_blank(img, *_default_footer_qr_box(img))
+
+def apply_qr_watermark_replace(img: np.ndarray, paste_custom_qr: bool = True,
+                               fallback_qr_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
+                               force_default_qr: bool = False,
+                               collected_qr_boxes: Optional[List[Tuple[int, int, int, int]]] = None) -> np.ndarray:
+    """Detect QR-shaped watermarks across likely watermark zones and replace them with our QR."""
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    dark_mask = (gray < 150).astype(np.uint8) * 255
+    dark_mask = cv2.dilate(dark_mask, np.ones((3, 3), np.uint8), iterations=1)
+
+    components, _, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+    min_side = max(55, int(min(h, w) * 0.05))
+    max_side = int(min(h, w) * 0.22)
+    handled_boxes = []
+    qr_pasted = False
+
+    for label in range(1, components):
+        x, y, comp_w, comp_h, area = stats[label]
+        if area <= 0:
+            continue
+        is_watermark_zone = _is_qr_watermark_zone(x, y, comp_w, comp_h, w, h)
+        has_enough_ink = area >= int(min(comp_w, comp_h) * min(comp_w, comp_h) * 0.18)
+        if not is_watermark_zone or not has_enough_ink:
+            continue
+
+        candidate_boxes = _candidate_qr_boxes_from_component(x, y, comp_w, comp_h, min_side, max_side)
+        for qr_x, qr_y, qr_w, qr_h in candidate_boxes:
+            pad = max(6, int(max(qr_w, qr_h) * 0.08))
+            x1 = max(0, qr_x - pad)
+            y1 = max(0, qr_y - pad)
+            qr_x2 = min(w, qr_x + qr_w + pad)
+            qr_y2 = min(h, qr_y + qr_h + pad)
+            patch = img[qr_y:qr_y + qr_h, qr_x:qr_x + qr_w]
+            if patch.size == 0 or _qr_finder_pattern_count(patch) < 3:
+                continue
+
+            skip = False
+            for prev_x1, prev_y1, prev_x2, prev_y2 in handled_boxes:
+                overlap_x = max(0, min(qr_x2, prev_x2) - max(x1, prev_x1))
+                overlap_y = max(0, min(qr_y2, prev_y2) - max(y1, prev_y1))
+                if overlap_x * overlap_y > 0:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            side = max(qr_w, qr_h)
+            wipe_y1 = max(0, y1 - int(side * 0.10))
+            wipe_x2 = min(w, qr_x2 + int(side * 0.45))
+            wipe_y2 = min(h, qr_y2 + int(side * 0.70))
+            img[wipe_y1:wipe_y2, x1:wipe_x2] = [255, 255, 255]
+            if collected_qr_boxes is not None:
+                collected_qr_boxes.append((x1, y1, qr_x2, qr_y2))
+            if paste_custom_qr:
+                _paste_custom_qr(img, x1, y1, qr_x2, qr_y2)
+                qr_pasted = True
+            handled_boxes.append((x1, y1, qr_x2, qr_y2))
+
+    if paste_custom_qr and not qr_pasted:
+        for box in fallback_qr_boxes or []:
+            x1, y1, x2, y2 = box
+            if _is_qr_watermark_zone(x1, y1, x2 - x1, y2 - y1, w, h):
+                _paste_qr_on_blank(img, x1, y1, x2, y2)
+                qr_pasted = True
+                break
+
+    if paste_custom_qr and force_default_qr and not qr_pasted:
+        _paste_qr_on_blank(img, *_default_footer_qr_box(img))
+
+    # Some BofA pages carry a tiny lower-left logo rather than a QR.
     y_start = int(h * 0.72)
     x_end = int(w * 0.36)
     roi = img[y_start:h, 0:x_end]
     if roi.size == 0:
         return img
-
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    dark_mask = (gray < 150).astype(np.uint8) * 255
-    dark_mask = cv2.dilate(dark_mask, np.ones((3, 3), np.uint8), iterations=1)
-
-    components, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
-    for label in range(1, components):
-        x, y, comp_w, comp_h, area = stats[label]
-        abs_y = y_start + y
-        if area <= 0:
-            continue
-        aspect = comp_w / max(comp_h, 1)
-        is_footer_square = (
-            abs_y > int(h * 0.86) and
-            x < int(w * 0.18) and
-            35 <= comp_w <= int(w * 0.12) and
-            35 <= comp_h <= int(h * 0.12) and
-            0.70 <= aspect <= 1.35 and
-            area >= 700
-        )
-        if is_footer_square:
-            pad = max(6, int(max(comp_w, comp_h) * 0.08))
-            x1 = max(0, x - pad)
-            y1 = max(0, y_start + y - pad)
-            x2 = min(w, x + comp_w + pad)
-            qr_y2 = min(h, y_start + y + comp_h + pad)
-            wipe_y2 = min(h, y_start + y + comp_h + int(comp_h * 0.55))
-            img[y1:wipe_y2, x1:x2] = [255, 255, 255]
-            _paste_custom_qr(img, x1, y1, x2, qr_y2)
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     saturation = hsv[:, :, 1]
@@ -335,16 +509,27 @@ def apply_nomura_header_strip(img: np.ndarray) -> np.ndarray:
     img[0 : int(h * 0.12), :] = [255, 255, 255]
     return img
 
-def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool, 
-                  institution: str = "unknown") -> Tuple[np.ndarray, float]:
+def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
+                  institution: str = "unknown",
+                  page_number: Optional[int] = None) -> Tuple[np.ndarray, float]:
     start = time.time()
+    paste_custom_qr = _should_paste_custom_qr(page_number)
     
     # 1. Global Bleach
     img = apply_global_bleach(img, threshold)
     
     # 2. Template Matching Wipe (New!)
-    img = apply_template_wipe(img)
-    img = apply_lower_left_watermark_clean(img)
+    fallback_qr_boxes: List[Tuple[int, int, int, int]] = []
+    detected_qr_boxes: List[Tuple[int, int, int, int]] = []
+    img = apply_template_wipe(img, paste_custom_qr=False, qr_boxes=fallback_qr_boxes)
+    img = apply_qr_watermark_replace(
+        img,
+        paste_custom_qr=False,
+        fallback_qr_boxes=fallback_qr_boxes,
+        force_default_qr=False,
+        collected_qr_boxes=detected_qr_boxes,
+    )
+    img = apply_footer_red_watermark_clean(img)
     
     # 3. Institution-Specific Wipes
     if institution == "ms":
@@ -357,6 +542,13 @@ def _bleach_image(img: np.ndarray, threshold: int, do_header_clean: bool,
         img = apply_header_clean(img)
     
     img = apply_footer_wipe(img)
+
+    if paste_custom_qr:
+        _paste_custom_qr_from_candidates(
+            img,
+            detected_qr_boxes + fallback_qr_boxes,
+            force_default_qr=(page_number is not None),
+        )
     
     return img, time.time() - start
 
@@ -370,7 +562,7 @@ def _process_page_parallel(page_index: int, img_bytes: bytes, threshold: int,
         return {'index': page_index, 'success': False, 'error': 'Image decode failed'}
 
     # 1. Bleach with Institution context
-    img, bleach_duration = _bleach_image(img, threshold, do_header_clean, institution)
+    img, bleach_duration = _bleach_image(img, threshold, do_header_clean, institution, page_index + 1)
 
     # 2. OCR
     ocr_results = []

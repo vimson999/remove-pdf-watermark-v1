@@ -22,6 +22,24 @@ logs/*
 !uploads/.gitkeep
 !downloads/.gitkeep
 
+# Local batch-processing workspaces
+待清理/
+清理完毕/
+音频/
+
+# Local scratch inputs/outputs and generated previews
+/*.pdf
+/*.docx
+/*.rtf
+/*.log
+/verify_page.png
+/out.log
+/debug_init.log
+/batch_process_*.log
+samples/outputs/*
+!samples/outputs/ScreenShot_2026-02-28_164652_543.png
+samples/*.pdf
+
 # OS
 .DS_Store
 Thumbs.db

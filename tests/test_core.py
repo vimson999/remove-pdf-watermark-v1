@@ -2,8 +2,15 @@ import pytest
 import os
 import shutil
 import fitz # type: ignore
+import numpy as np
 from app import create_app
-from app.services.pdf_processor import PDFProcessor
+from app.services.pdf_processor import (
+    CUSTOM_QR_FILENAME,
+    PDFProcessor,
+    _candidate_qr_boxes_from_component,
+    _should_paste_custom_qr,
+    apply_footer_red_watermark_clean,
+)
 
 @pytest.fixture
 def app():
@@ -29,6 +36,30 @@ def clean_env(app):
 def test_processor_initialization():
     processor = PDFProcessor(threshold=200)
     assert processor.threshold == 200
+
+def test_custom_qr_resource_is_our_wechat_qr():
+    assert CUSTOM_QR_FILENAME == "my_wechat_qr.png"
+    assert os.path.exists(os.path.join("app", "resources", "watermarks", CUSTOM_QR_FILENAME))
+
+def test_rectangular_qr_component_generates_square_candidate():
+    boxes = _candidate_qr_boxes_from_component(84, 2026, 166, 124, 85, 374)
+    assert (84, 2026, 124, 124) in boxes
+
+def test_custom_qr_is_only_pasted_on_even_pages():
+    assert _should_paste_custom_qr(1) is False
+    assert _should_paste_custom_qr(2) is True
+    assert _should_paste_custom_qr(3) is False
+    assert _should_paste_custom_qr(4) is True
+
+def test_footer_red_clean_is_limited_to_footer_band():
+    img = np.full((200, 300, 3), 255, dtype=np.uint8)
+    img[30:40, 40:90] = [0, 0, 255]
+    img[180:190, 120:220] = [0, 0, 255]
+
+    cleaned = apply_footer_red_watermark_clean(img.copy())
+
+    assert np.array_equal(cleaned[30:40, 40:90], img[30:40, 40:90])
+    assert np.all(cleaned[180:190, 120:220] == 255)
 
 def test_homepage(client):
     response = client.get('/')

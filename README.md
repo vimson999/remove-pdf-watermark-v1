@@ -24,22 +24,14 @@ pip install -r requirements.txt
 ```
 
 ### 2. 启动核心服务 (Services)
-请按顺序启动以下三个终端窗口：
+当前 Web 批量清洗和音频裁剪任务由 Flask 后台线程执行，并通过本地 SQLite 记录进度。日常使用只需要启动 Web 服务：
 
-*   **窗口 A: 消息代理 (Redis)**
-    ```bash
-    redis-server
-    ```
-*   **窗口 B: 异步任务处理 (Celery Worker)**
-    ```bash
-    # 确保已激活 venv
-    celery -A run.celery worker --loglevel=info
-    ```
-*   **窗口 C: Web 服务器 (Flask)**
-    ```bash
-    # 确保已激活 venv
-    python run.py
-    ```
+```bash
+# 确保已激活 venv
+python run.py
+```
+
+Celery/Redis 相关文件仍保留在项目中，作为后续迁移到独立异步任务队列的基础。
 
 ### 3. 浏览器访问 (Browser Access)
 服务启动后，在浏览器中输入以下地址即可进入控制面板：
@@ -51,8 +43,22 @@ pip install -r requirements.txt
 
 *   **混合引擎**：`PyMuPDF` (文本层清理) + `OpenCV` (图像层漂白)。
 *   **语义重构**：集成 `EasyOCR`，通过 **MPS (Metal Performance Shaders)** 硬件加速实现在图片上方原位注入隐形文字层。
-*   **异步调度**：`Celery` + `Redis` 实现大文件处理不阻塞，支持多进程并行清洗。
+*   **批量任务**：Web 端提交任务后由后台线程处理，SQLite 记录任务和逐文件进度。
 *   **智能分析**：自动识别扫描件/电子版，并推荐最优处理阈值。
+
+---
+
+## 📁 本地工作目录约定 (Workspace)
+
+这些目录用于本地处理数据，不进入 Git 仓库：
+
+*   `待清理/`：放入待批量清洗的 PDF。
+*   `清理完毕/`：批量清洗输出目录，保留输入目录的相对层级。
+*   `音频/待清理/`：放入待裁剪音频。
+*   `音频/清理完毕/`：音频裁剪输出目录。
+*   `logs/`、`downloads/`、`uploads/`：运行日志、临时上传和下载产物。
+
+仓库内应主要保留代码、模板、固定水印资源、少量可复现测试样本和测试用例。
 
 ---
 
